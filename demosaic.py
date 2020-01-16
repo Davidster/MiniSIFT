@@ -34,6 +34,18 @@ def getColorByPosition(i, j):
 def applyFilter(image, filter):
   return cv.filter2D(image, -1, filter, borderType=cv.BORDER_ISOLATED)
 
+# Calculates the sum of the squares of the differences of each channel
+# between the final image and the initial image
+# TODO: normalize between a value of 0 -> 255
+def generateDifferenceImage(final, initial):
+  differences = final - initial
+  differencesSquared = (differences * differences)
+  dB, dG, dR = np.split(differencesSquared, 3, axis=2)
+  return (dB + dG + dR).astype("uint8")
+
+def displayImage(name, data):
+  cv.imshow(name, data.clip(0, 255).astype("uint8"))
+
 # Filter used to interpolate blue and green channels
 blueGreenFilter = np.array([
   [0.25, 0.5, 0.25], 
@@ -55,7 +67,7 @@ oldwellMosaic = cv.imread("image_set/oldwell_mosaic.bmp")
 # separate mosaic into three color channels
 # TODO: convert to list comprehension
 owmHeight, owmWidth, d = oldwellMosaic.shape
-owmSeparated = np.zeros((owmHeight, owmWidth, 3), np.uint8)
+owmSeparated = np.zeros((owmHeight, owmWidth, 3), np.float32)
 for i, row in enumerate(oldwellMosaic):
   for j, col in enumerate(oldwellMosaic[i]):
     supposedColor = getColorByPosition(i, j)
@@ -70,18 +82,39 @@ owmRed = applyFilter(owmRed, redFilter)
 # merge channels into a single RGB image
 owmDemosaiced = cv.merge([owmBlue, owmGreen, owmRed])
 
-# calculate root squared 
-# TODO: normalize between a value of 0 -> 255
-differences = owmDemosaiced - oldwell
-differencesSquared = (differences * differences)
-dB, dG, dR = np.split(differencesSquared, 3, axis=2)
-differencesSquaredSummed = (dB + dG + dR).astype("uint8")
+# calculate difference image 
+differencesSquaredSummed = generateDifferenceImage(owmDemosaiced, oldwell)
+
+differenceImgG = owmGreen - owmRed
+differenceImgB = owmBlue - owmRed
+
+# displayImage("differenceImgG", differenceImgG)
+# displayImage("differenceImgB", differenceImgB)
+
+differenceImgG = cv.medianBlur(differenceImgG, 3)
+differenceImgB = cv.medianBlur(differenceImgB, 3)
+
+# displayImage("differenceImgGb", differenceImgG)
+# displayImage("differenceImgBb", differenceImgB)
+
+owmGreen = differenceImgG + owmRed
+owmBlue = differenceImgB + owmRed
+
+# merge channels into a single RGB image
+owmDemosaicedFreeman = cv.merge([owmBlue, owmGreen, owmRed])
+
+# calculate difference image 
+differencesSquaredSummedF = generateDifferenceImage(owmDemosaicedFreeman, oldwell)
+
+# displayImage("differenceImgGBlurred", differenceImgG)
 
 # display the results
 # TODO: try to position the images next to each other so user
 # doesn't have to move them manually?
-cv.imshow("oldwell", oldwell)
-cv.imshow("owmDemosaiced", owmDemosaiced)
-cv.imshow("differencesSquaredSummed", differencesSquaredSummed)
+displayImage("oldwell", oldwell)
+displayImage("owmDemosaiced", owmDemosaiced)
+displayImage("owmDemosaicedFreeman", owmDemosaicedFreeman)
+displayImage("differencesSquaredSummed", differencesSquaredSummed)
+displayImage("differencesSquaredSummedF", differencesSquaredSummedF)
 
 cv.waitKey(0)
