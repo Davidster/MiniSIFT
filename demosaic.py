@@ -36,85 +36,95 @@ def applyFilter(image, filter):
 
 # Calculates the sum of the squares of the differences of each channel
 # between the final image and the initial image
-# TODO: normalize between a value of 0 -> 255
 def generateDifferenceImage(final, initial):
   differences = final - initial
   differencesSquared = (differences * differences)
   dB, dG, dR = np.split(differencesSquared, 3, axis=2)
-  return (dB + dG + dR).astype("uint8")
+  euclidianDifference = np.sqrt(dB + dG + dR)
+  return cv.cvtColor(euclidianDifference.astype("uint8"), cv.COLOR_GRAY2BGR)
 
 def displayImage(name, data):
   cv.imshow(name, data.clip(0, 255).astype("uint8"))
 
-# Filter used to interpolate blue and green channels
+def zoomInOnPencilHead(difference):
+  # define rectangle around pencil's head
+  closeupRectangle = [[70, 120], [275, 307]]
+  # slice image arond rectangle
+  closeup = difference[
+    closeupRectangle[0][0]:closeupRectangle[0][1], 
+    closeupRectangle[1][0]:closeupRectangle[1][1]
+  ]
+  # zoom in 5x
+  closeup = cv.resize(closeup, None, fx=5, fy=5, interpolation=cv.INTER_AREA)
+  # draw thin green border
+  closeup = cv.copyMakeBorder(closeup, 1, 1, 1, 1, cv.BORDER_CONSTANT, None, (0, 255, 0))
+  # draw thick black border such that the height is equal to the original image
+  verticalPadding = int((mHeight - closeup.shape[0]) / 2)
+  horizontalPadding = 20
+  return cv.copyMakeBorder(closeup, verticalPadding, verticalPadding, horizontalPadding, horizontalPadding, cv.BORDER_CONSTANT, None, (0, 0, 0))
+
+# filter used to interpolate blue and green channels
 blueGreenFilter = np.array([
   [0.25, 0.5, 0.25], 
   [0.5,  1,   0.5], 
   [0.25, 0.5, 0.25]])
 
-# Filter used to interpolate red channel
+# filter used to interpolate red channel
 redFilter = np.array([
   [0, 0.25, 0], 
   [0.25, 1, 0.25], 
   [0, 0.25, 0]])
 
-# MAIN
+# PART 1
 
 # read and parse images from fs
-oldwell = cv.imread("image_set/oldwell.jpg")
-oldwellMosaic = cv.imread("image_set/oldwell_mosaic.bmp")
+realImage = cv.imread("image_set/pencils.jpg")
+mosaicedImage = cv.imread("image_set/pencils_mosaic.bmp")
+mHeight, mWidth, mChannels = mosaicedImage.shape
+print(f'Image shape: {mHeight} x {mWidth} px')
 
 # separate mosaic into three color channels
 # TODO: convert to list comprehension
-owmHeight, owmWidth, d = oldwellMosaic.shape
-owmSeparated = np.zeros((owmHeight, owmWidth, 3), np.float32)
-for i, row in enumerate(oldwellMosaic):
-  for j, col in enumerate(oldwellMosaic[i]):
-    supposedColor = getColorByPosition(i, j)
-    owmSeparated[i][j][supposedColor] = col[0]
-owmBlue, owmGreen, owmRed = cv.split(owmSeparated)
+mSeparated = np.zeros((mHeight, mWidth, 3), np.float32)
+for i, row in enumerate(mosaicedImage):
+  for j, col in enumerate(mosaicedImage[i]):
+    mSeparated[i][j][getColorByPosition(i, j)] = col[0]
+mBlue, mGreen, mRed = cv.split(mSeparated)
 
 # run appropriate filter on each channel 
-owmBlue = applyFilter(owmBlue, blueGreenFilter)
-owmGreen = applyFilter(owmGreen, blueGreenFilter)
-owmRed = applyFilter(owmRed, redFilter)
+mBlue = applyFilter(mBlue, blueGreenFilter)
+mGreen = applyFilter(mGreen, blueGreenFilter)
+mRed = applyFilter(mRed, redFilter)
 
 # merge channels into a single RGB image
-owmDemosaiced = cv.merge([owmBlue, owmGreen, owmRed])
+demosaicedImage = cv.merge([mBlue, mGreen, mRed])
 
 # calculate difference image 
-differencesSquaredSummed = generateDifferenceImage(owmDemosaiced, oldwell)
+demosaicDifferenceImage = generateDifferenceImage(demosaicedImage, realImage)
+demosaicDifferenceImageZoomed = zoomInOnPencilHead(demosaicDifferenceImage)
 
-differenceImgG = owmGreen - owmRed
-differenceImgB = owmBlue - owmRed
+# PART 2 - Freeman tactic
 
-# displayImage("differenceImgG", differenceImgG)
-# displayImage("differenceImgB", differenceImgB)
-
-differenceImgG = cv.medianBlur(differenceImgG, 3)
-differenceImgB = cv.medianBlur(differenceImgB, 3)
-
-# displayImage("differenceImgGb", differenceImgG)
-# displayImage("differenceImgBb", differenceImgB)
-
-owmGreen = differenceImgG + owmRed
-owmBlue = differenceImgB + owmRed
+dGR = mGreen - mRed
+dBR = mBlue - mRed
+dGR = cv.medianBlur(dGR, 5)
+dBR = cv.medianBlur(dBR, 5)
+mGreen = dGR + mRed
+mBlue = dBR + mRed
 
 # merge channels into a single RGB image
-owmDemosaicedFreeman = cv.merge([owmBlue, owmGreen, owmRed])
+freemannedImage = cv.merge([mBlue, mGreen, mRed])
 
 # calculate difference image 
-differencesSquaredSummedF = generateDifferenceImage(owmDemosaicedFreeman, oldwell)
+freemanDifferenceImage = generateDifferenceImage(freemannedImage, realImage)
+freemanDifferenceImageZoomed = zoomInOnPencilHead(freemanDifferenceImage)
 
-# displayImage("differenceImgGBlurred", differenceImgG)
+# DISPLAY RESULTS
 
-# display the results
-# TODO: try to position the images next to each other so user
-# doesn't have to move them manually?
-displayImage("oldwell", oldwell)
-displayImage("owmDemosaiced", owmDemosaiced)
-displayImage("owmDemosaicedFreeman", owmDemosaicedFreeman)
-displayImage("differencesSquaredSummed", differencesSquaredSummed)
-displayImage("differencesSquaredSummedF", differencesSquaredSummedF)
+# arrange the 4 images horiontally into a single image
+partOneShowcase = np.concatenate((realImage, demosaicedImage, demosaicDifferenceImage, demosaicDifferenceImageZoomed), axis=1)
+displayImage("partOneShowcase", partOneShowcase)
+partTwoShowcase = np.concatenate((realImage, freemannedImage, freemanDifferenceImage, freemanDifferenceImageZoomed), axis=1)
+displayImage("partTwoShowcase", partTwoShowcase)
 
 cv.waitKey(0)
