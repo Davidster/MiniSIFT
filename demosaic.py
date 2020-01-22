@@ -123,8 +123,8 @@ freemanDifferenceImageZoomed = zoomInOnPencilHead(freemanDifferenceImage)
 
 # arrange the 4 images horiontally into a single image
 partOneShowcase = np.concatenate((realImage, demosaicedImage, demosaicDifferenceImage, demosaicDifferenceImageZoomed), axis=1)
-displayImage("partOneShowcase", partOneShowcase)
+displayImage("Part 1 Showcase", partOneShowcase)
 partTwoShowcase = np.concatenate((realImage, freemannedImage, freemanDifferenceImage, freemanDifferenceImageZoomed), axis=1)
-displayImage("partTwoShowcase", partTwoShowcase)
+displayImage("Part 2 Showcase", partTwoShowcase)
 
 cv.waitKey(0)
