@@ -7,6 +7,7 @@ import functools
 import operator
 import random
 import itertools
+import os
 from PIL import Image, ImageDraw
 
 sobelFilterScale = 1/8
@@ -23,7 +24,11 @@ RED_PIXEL = np.array([0, 0, 255]).astype("uint8")
 BLUE_PIXEL = np.array([255, 0, 0]).astype("uint8")
 GREEN_PIXEL = np.array([0, 255, 0]).astype("uint8")
 
-THREADS = 4
+THREADS = 6
+try:
+  THREADS = os.cpu_count() * 2
+except:
+  print("Could not get os.cpu_count(). Falling back on 6 threads.")
 
 def applyFilter(image, filter):
   return cv.filter2D(image, -1, filter, borderType=cv.BORDER_ISOLATED)
@@ -485,14 +490,4 @@ if __name__== "__main__":
   cv.imshow("img2 ratio", annotateKeypoints(img2, img2RatioKeypoints))
 
   cv.waitKey(0)
-  # grafImg4Gradient = getSobelGradient(grafImg4)
-  # grafImg4Keypoints = computeHarrisKeypoints(grafImg4, grafImg4Gradient)
-
-  
-  # cv.imshow("grafImg4", annotateKeypoints(grafImg4, grafImg4Keypoints))
-  # cv.imshow("original", image)
-  # cv.imshow("harrisCornerStrengthImage", harrisCornerStrengthImage)
-  # cv.imshow("thresholded", thresholded)
-  # cv.imshow("nonMaxSuppressed", nonMaxSuppressed)
-  # cv.imshow("annotatedImage", annotatedImage)
   
