@@ -6,6 +6,7 @@ import time
 import functools
 import operator
 import random
+import itertools
 from PIL import Image, ImageDraw
 
 sobelFilterScale = 1/8
@@ -21,6 +22,8 @@ sobelFilterY = np.array([
 RED_PIXEL = np.array([0, 0, 255]).astype("uint8")
 BLUE_PIXEL = np.array([255, 0, 0]).astype("uint8")
 GREEN_PIXEL = np.array([0, 255, 0]).astype("uint8")
+
+THREADS = 4
 
 def applyFilter(image, filter):
   return cv.filter2D(image, -1, filter, borderType=cv.BORDER_ISOLATED)
@@ -57,8 +60,8 @@ def mergeNpGradChannels(db, dg, dr):
 def applyGaussian(image, shape = (3, 3), sigma = 1):
   return cv.GaussianBlur(image, shape, sigma, borderType=cv.BORDER_REFLECT_101)
 
-def computeCornerStrengths(aphg, imageshape, threads = 3):
-  with Pool(threads) as pool:
+def computeCornerStrengths(aphg, imageshape):
+  with Pool(THREADS) as pool:
     return np.reshape(list(pool.map(
           computeCornerStrength,
           list(map(lambda p: (aphg, p[0], p[1]), np.ndindex(imageshape[0], imageshape[1])))
@@ -120,6 +123,7 @@ def distance2D(a, b):
   dy = a[1] - b[1]
   return math.sqrt(dx * dx + dy * dy)
 
+MAX_KEYPOINTS_PER_IMAGE = 750
 def computeHarrisKeypoints(image, gradient):
   dx, dy = gradient
 
@@ -150,14 +154,19 @@ def computeHarrisKeypoints(image, gradient):
         lambda p: isMaxAmongNeighbors(thresholded, p) * thresholded[p[0]][p[1]], 
         np.ndindex(*thresholded.shape)))),
     thresholded.shape)
-  keypoints = list(filter(lambda point: point[1] > 0, 
-    np.ndenumerate(nonMaxSuppressed)))
+  keypoints = filter(lambda point: point[1] > 0, 
+    np.ndenumerate(nonMaxSuppressed))
   # cv.imshow("nonMaxSuppressed", nonMaxSuppressed)
 
-  keypoints = list(filter(
+  keypoints = filter(
     lambda point: not pointNearBoundary(point, image.shape),
     keypoints
-  ))
+  )
+
+  keypoints = sorted(keypoints, 
+    key=lambda keypoint: keypoint[1], reverse=True)
+
+  keypoints = list(itertools.islice(keypoints, MAX_KEYPOINTS_PER_IMAGE))
 
   print(f"Non max suppresion: {(time.time() - startTime) * 1000}ms")
   print(f"Found {len(keypoints)} keypoints")
@@ -210,6 +219,9 @@ def getKeypointOrientation(keypoint, imageShape, gradientMagnitudes, gradientDir
     (max(0, keypointX - ORIENTATION_WINDOWSIZE), max(0, keypointY - ORIENTATION_WINDOWSIZE)), 
     (min(imageShape[0], keypointX + ORIENTATION_WINDOWSIZE), min(imageShape[1], keypointY + ORIENTATION_WINDOWSIZE))
   )
+
+  gradientDirections = (gradientDirections + (math.pi * 2)) % (math.pi * 2)
+
   # print(keypoint)
   # print(neighborhood)
   binCount = 10
@@ -242,13 +254,11 @@ def getKeypointOrientation(keypoint, imageShape, gradientMagnitudes, gradientDir
   return orientedKeypoints
 
 def normalize(npVector):
-  # print(npVector)
   return npVector / (np.sqrt(np.nansum(npVector * npVector)) + 0.0001)
 
 SIFT_WINDOWSIZE = 8
 SIFT_SUB_WINDOWSIZE = 4
 SIFT_GAUSSIAN = cv.getGaussianKernel(SIFT_WINDOWSIZE * 2, 4)
-# print(SIFT_GAUSSIAN)
 def getKeypointDescriptor(keypoint, imageShape, gradientMagnitudes, gradientDirections):
   (keypointX, keypointY), val, orientation = keypoint
   neighborhood = (
@@ -256,11 +266,7 @@ def getKeypointDescriptor(keypoint, imageShape, gradientMagnitudes, gradientDire
     (keypointX + SIFT_WINDOWSIZE, keypointY + SIFT_WINDOWSIZE)
   )
 
-  # print(keypoint)
-  # print(gradientDirections[0:3][0:3])
   gradientDirections = (gradientDirections - keypoint[2] + (math.pi * 2)) % (math.pi * 2)
-  # print(gradientDirections[0:3][0:3])
-  
 
   descriptor = []
   for i in range(0, 4):
@@ -268,7 +274,6 @@ def getKeypointDescriptor(keypoint, imageShape, gradientMagnitudes, gradientDire
       startX = neighborhood[0][0] + (i * 4)
       startY = neighborhood[0][1] + (j * 4)
       subNeighborhood = ((startX, startY), (startX + 4, startY + 4))
-      # print(f"subNeighborhood: {subNeighborhood}")
 
       binCount = 8
       orientationVoteCounts = np.zeros(binCount)
@@ -277,41 +282,19 @@ def getKeypointDescriptor(keypoint, imageShape, gradientMagnitudes, gradientDire
           binIndex = math.floor(binCount * gradientDirections[x][y] / (math.pi * 2))
           gaussianFactor = SIFT_GAUSSIAN[x - keypointX] * SIFT_GAUSSIAN[y - keypointY]
           orientationVoteCounts[binIndex] += gaussianFactor * gradientMagnitudes[x][y]
-          
-      # if(np.sum(orientationVoteCounts) < 0.001):
-      #   print("bruh")
-      #   print(keypoint)
-      #   print(neighborhood)     
-      #   print(orientationVoteCounts)
-      #   print(normalize(np.clip(normalize(orientationVoteCounts), None, 0.2)))
-      #   print(np.sum(normalize(np.clip(normalize(orientationVoteCounts), None, 0.2))))
-        # for x in range(subNeighborhood[0][0], subNeighborhood[1][0]):
-        #   for y in range(subNeighborhood[0][1], subNeighborhood[1][1]):
-        #     binIndex = math.floor(binCount * gradientDirections[x][y] / (math.pi * 2))
-        #     gaussianFactor = SIFT_GAUSSIAN[x - keypointX] * SIFT_GAUSSIAN[y - keypointY]
-            # orientationVoteCounts[binIndex] += gaussianFactor * gradientMagnitudes[x][y]
-            # print(f"({x}, {y})")
-            # print(f"grad: {gradientDirections[x][y]}")
-            # print(f"binIndex: {binIndex}")
-            # print(f"gaussianFactor: {gaussianFactor}")
-            # print(f"gradientMagnitudes[x][y]: {gradientMagnitudes[x][y]}")
 
-      
-      # orientationVoteCounts = normalize(np.clip(normalize(orientationVoteCounts), None, 0.2))
       descriptor += list(orientationVoteCounts)
 
   descriptor = list(normalize(np.clip(normalize(np.array(descriptor)), None, 0.2)))
-
-  # print(f"descriptor length: {len(descriptor)}")
   return (*keypoint, descriptor)
 
 def getKeypointDescriptors(image, gradient, keypoints):
   dx, dy = gradient
   # dx, dy = getNpGradient2(applyGaussian(image))
+  startTime = time.time()
   gradientMagnitudes = np.sqrt(dx * dx + dy * dy)
   gradientDirections = np.arctan2(dy, dx) + math.pi
   newKeypoints = []
-  print("Computing descriptors")
   count = 0
   for keypoint in keypoints:
     # startTime = time.time()
@@ -320,159 +303,131 @@ def getKeypointDescriptors(image, gradient, keypoints):
       lambda kp: getKeypointDescriptor(kp, image.shape, gradientMagnitudes, gradientDirections),
       orientedKeypoints
     ))
-    for n in range(0, len(orientedKeypoints)):
-      count += 1
-      if(count % 100 == 0):
-        print(f"Done {count} / {len(keypoints)} keypoints")
-    # print(f"Keypoint done in: {(time.time() - startTime) * 1000}ms")
-    # print(f"peakBinIndex: {peakBinIndex}")
-    # print(f"neighborhood: {neighborhood}")
-    # print(f"parabola vertex: {getParabolaVertex(*neighborhood)}")
-    # print((*keypoint, getParabolaVertex(*neighborhood)[0]))
+    count += 1
+    if(count % 100 == 0):
+      print(f"Done {count} / {len(keypoints)} keypoints")
     newKeypoints = newKeypoints + descriptedKeypoints
-    # newKeypoints.append((*keypoint, neighborhood[1][0]))
 
-
-  # print(newKeypoints[0:5])
-  print(f"Done {count} / {len(keypoints)} keypoints")
+  print(f"Computed {len(keypoints)} descriptors in {(time.time() - startTime) * 1000}ms")
   print(f"New keypoint count: {len(newKeypoints)}")
   return newKeypoints
 
-def getBestMatchesByThreshold(img1Keypoints, img2Keypoints):
-  matches = []
-  startTime = time.time()
-  count = 0
-  for img1Keypoint in img1Keypoints:
-    for img2Keypoint in img2Keypoints:
-      diff = np.array(img2Keypoint[3]) - np.array(img1Keypoint[3])
-      matches.append((img1Keypoint[:3], img2Keypoint[:3], np.sqrt(np.sum(diff * diff))))
-      count += 1
-      if count % 20000 == 0:
-        print(f"Computed {count} / {len(img1Keypoints) * len(img2Keypoints)} keypoint distances")
-  print(f"Matches computed in {(time.time() - startTime) * 1000}ms")
-  
-  startTime = time.time()
-  sortedMatches = sorted(matches, key=lambda pair: pair[2])
+def computeDistance(args):
+  keypoint1, keypoint2 = args
+  diff = np.array(keypoint2[3]) - np.array(keypoint1[3])
+  return (keypoint1[:3], keypoint2[:3], np.sqrt(np.sum(diff * diff)))
 
+WORKER_CHUNK_SIZE=100000
+def getSortedKeypointPairs(img1Keypoints, img2Keypoints):
+  allPairs = []
+  startTime = time.time()
+  with Pool(THREADS) as pool:
+    distanceMappings = pool.imap_unordered(
+      computeDistance,
+      itertools.product(img1Keypoints, img2Keypoints),
+      WORKER_CHUNK_SIZE
+    )
+    for i, result in enumerate(distanceMappings, 1):
+      if i % WORKER_CHUNK_SIZE == 0:
+        print(f"Computed {i} / {len(img1Keypoints) * len(img2Keypoints)} keypoint distances")
+      allPairs.append(result)
+  # count = 0
+  # for img1Keypoint in img1Keypoints:
+  #   for img2Keypoint in img2Keypoints:
+  #     diff = np.array(img2Keypoint[3]) - np.array(img1Keypoint[3])
+  #     allPairs.append((img1Keypoint[:3], img2Keypoint[:3], np.sqrt(np.sum(diff * diff))))
+  #     count += 1
+  #     if count % 20000 == 0:
+  #       print(f"Computed {count} / {len(img1Keypoints) * len(img2Keypoints)} keypoint distances")
+  print(f"Computed {len(img1Keypoints) * len(img2Keypoints)} keypoint distances in {(time.time() - startTime) * 1000}ms")
+
+  startTime = time.time()
+  sortedPairs = sorted(allPairs, key=lambda pair: pair[2])
+  print(f"Keypoint distances sorted in {(time.time() - startTime) * 1000}ms")
+  return sortedPairs
+
+def getBestMatchesByThreshold(sortedKeypointPairs):
+  startTime = time.time()
   maxDistance = 0.75
-  filteredMatches = list(filter(lambda match: match[2] < maxDistance, sortedMatches))
+  topMatches = list(filter(lambda match: match[2] < maxDistance, sortedKeypointPairs))
+  topMatches = dedupePoints(topMatches)
 
-  all1s = set()
-  all2s = set()
-  for match in filteredMatches:
-    all1s.add(match[0][0]) 
-    all2s.add(match[1][0])
-
-  used1s = set()
-  used2s = set()
-  topMatches = []
-  while True:
-    foundMatch = False
-    for match in filteredMatches:
-      match1, match2, distance = match
-      match1 = match1[0]
-      match2 = match2[0]
-      if match1 in used1s or match2 in used2s:
-        continue
-      foundMatch = True
-      used1s.add(match1) 
-      used2s.add(match2)
-      topMatches.append(match)
-      break
-    if not foundMatch or len(used1s) == len(all1s) or len(used2s) == len(all2s):
-      print("No more unique matches to find")
-      break
-
-  print(f"Matches ranked in {(time.time() - startTime) * 1000}ms")
-  matchedRatio = len(topMatches) / len(sortedMatches)
+  print(f"Matches filtered in {(time.time() - startTime) * 1000}ms")
+  matchedRatio = len(topMatches) / len(sortedKeypointPairs)
   print(f"Selectd {len(topMatches)} (top {round(matchedRatio, 5) * 100}%) matches")
   print(f"Match distance range: {topMatches[0][2]} : {topMatches[-1][2]}")
 
-  img1MatchedKeypoints = []
-  img2MatchedKeypoints = []
-  for match in topMatches:
-    color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-    img1MatchedKeypoints.append((*match[0], color))
-    img2MatchedKeypoints.append((*match[1], color))
+  return colorizeMatches(topMatches)
 
-  return (img1MatchedKeypoints, img2MatchedKeypoints)
-
-def getBestMatchesByRatioTest(img1Keypoints, img2Keypoints):
-  matches = []
+def getBestMatchesByRatioTest(img1Keypoints, img2Keypoints, sortedKeypointPairs):
   startTime = time.time()
-  count = 0
-  for img1Keypoint in img1Keypoints:
-    for img2Keypoint in img2Keypoints:
-      diff = np.array(img2Keypoint[3]) - np.array(img1Keypoint[3])
-      matches.append((img1Keypoint[:3], img2Keypoint[:3], np.sqrt(np.sum(diff * diff))))
-      count += 1
-      if count % 20000 == 0:
-        print(f"Computed {count} / {len(img1Keypoints) * len(img2Keypoints)} keypoint distances")
-  print(f"Matches computed in {(time.time() - startTime) * 1000}ms")
-  
-  startTime = time.time()
-  sortedMatches = sorted(matches, key=lambda pair: pair[2])
-
   count = 0
   ratioMatches = []
   for keypoint in img1Keypoints:
-    bestMatch, secondBestMatch = list(filter(lambda match: match[0][0] == keypoint[0], sortedMatches))[:2]
+    bestMatch, secondBestMatch = itertools.islice(filter(lambda match: match[0][0] == keypoint[0], sortedKeypointPairs), 2)
     # print(f"keypoint: {keypoint[0]}\nbestMatch: {bestMatch}\nsecondBestMatch: {secondBestMatch}\nratio:{bestMatch[2]/secondBestMatch[2]}")
     ratioMatches.append((bestMatch[0], bestMatch[1], bestMatch[2]/secondBestMatch[2]))
     count += 1
-    if count % 25 == 0:
+    if count % 250 == 0:
       print(f"Computed {count} / {len(img1Keypoints) + len(img2Keypoints)} keypoint ratios")
   for keypoint in img2Keypoints:
-    bestMatch, secondBestMatch = list(filter(lambda match: match[1][0] == keypoint[0], sortedMatches))[:2]
+    bestMatch, secondBestMatch = itertools.islice(filter(lambda match: match[1][0] == keypoint[0], sortedKeypointPairs), 2)
     ratioMatches.append((bestMatch[0], bestMatch[1], bestMatch[2]/secondBestMatch[2]))
     count += 1
-    if count % 25 == 0:
+    if count % 250 == 0:
       print(f"Computed {count} / {len(img1Keypoints) + len(img2Keypoints)} keypoint ratios")
+  print(f"Computed {len(img1Keypoints) + len(img2Keypoints)} keypoint ratios in {(time.time() - startTime) * 1000}ms")
 
+  startTime = time.time()
   sortedRatioMatches = sorted(ratioMatches, key=lambda pair: pair[2])
+  maxDistance = 0.9
+  topMatches = list(filter(lambda match: match[2] < maxDistance, sortedRatioMatches))
+  topMatches = dedupePoints(topMatches)
 
-  maxDistance = 0.85
-  filteredMatches = list(filter(lambda match: match[2] < maxDistance, sortedRatioMatches))
+  print(f"Matches ranked in {(time.time() - startTime) * 1000}ms")
+  matchedRatio = len(topMatches) / len(sortedKeypointPairs)
+  print(f"Selectd {len(topMatches)} (top {round(matchedRatio, 5) * 100}%) matches")
+  print(f"Match distance range: {topMatches[0][2]} : {topMatches[-1][2]}")
 
+  return colorizeMatches(topMatches)
+
+def dedupePoints(keypointPairs):
   all1s = set()
   all2s = set()
-  for match in filteredMatches:
-    all1s.add(match[0][0]) 
-    all2s.add(match[1][0])
+  for pair in keypointPairs:
+    all1s.add(pair[0][0]) 
+    all2s.add(pair[1][0])
 
   used1s = set()
   used2s = set()
-  topMatches = []
+  deduped = []
   while True:
     foundMatch = False
-    for match in filteredMatches:
-      match1, match2, distance = match
-      match1 = match1[0]
-      match2 = match2[0]
-      if match1 in used1s or match2 in used2s:
+    for pair in keypointPairs:
+      pImg1, pImg2, distance = pair
+      pImg1 = pImg1[0]
+      pImg2 = pImg2[0]
+      if pImg1 in used1s or pImg2 in used2s:
         continue
       foundMatch = True
-      used1s.add(match1) 
-      used2s.add(match2)
-      topMatches.append(match)
+      used1s.add(pImg1) 
+      used2s.add(pImg2)
+      deduped.append(pair)
       break
     if not foundMatch or len(used1s) == len(all1s) or len(used2s) == len(all2s):
       print("No more unique matches to find")
       break
+  return deduped
 
-  print(f"Matches ranked in {(time.time() - startTime) * 1000}ms")
-  matchedRatio = len(topMatches) / len(sortedMatches)
-  print(f"Selectd {len(topMatches)} (top {round(matchedRatio, 5) * 100}%) matches")
-  print(f"Match distance range: {topMatches[0][2]} : {topMatches[-1][2]}")
-
-  img1MatchedKeypoints = []
-  img2MatchedKeypoints = []
-  for match in topMatches:
+def colorizeMatches(matches):
+  img1Matches = []
+  img2Matches = []
+  for match in matches:
     color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-    img1MatchedKeypoints.append((*match[0], color))
-    img2MatchedKeypoints.append((*match[1], color))
-
-  return (img1MatchedKeypoints, img2MatchedKeypoints)
+    img1Matches.append((*match[0], color))
+    img2Matches.append((*match[1], color))
+  
+  return (img1Matches, img2Matches)
 
 def pointNearBoundary(point, imageShape):
   (x, y), val = point
@@ -488,9 +443,16 @@ if __name__== "__main__":
   # img2 = cv.imread("image_sets/graf/img2.ppm")
   # img1 = cv.imread("image_sets/panorama/pano1_0009.png")
   # img2 = cv.imread("image_sets/panorama/pano1_0008.png")
-  img1 = cv.imread("image_sets/yosemite/Yosemite1.jpg")
-  img2 = cv.imread("image_sets/yosemite/Yosemite2.jpg")
+  # img1 = cv.imread("image_sets/yosemite/Yosemite1.jpg")
+  # img2 = cv.imread("image_sets/yosemite/Yosemite2.jpg")
+  # img1 = cv.imread("image_sets/myroom/left.jpg")
+  # img2 = cv.imread("image_sets/myroom/right.jpg")
+  # img1 = cv.imread("image_sets/myroom/straight.jpg")
+  # img2 = cv.imread("image_sets/myroom/rotated.jpg")
+  img1 = cv.imread("image_sets/mtl/left.jpg")
+  img2 = cv.imread("image_sets/mtl/right.jpg")
 
+  startTime = time.time()
   print("-- Harris Keypoints --") 
   print("-- Image 1 --")
   img1Gradient = getNpGradient2(img1)
@@ -505,13 +467,20 @@ if __name__== "__main__":
   print("-- Image 2 --")
   img2DescriptedKeypoints = getKeypointDescriptors(img2, img2Gradient, img2HarrisKeypoints)
 
+  print("-- Matching keypoints --")
+  sortedKeypointPairs = getSortedKeypointPairs(img1DescriptedKeypoints, img2DescriptedKeypoints)
+
   print("-- SSD Matches --")
-  img1SSDKeypoints, img2SSDKeypoints = getBestMatchesByThreshold(img1DescriptedKeypoints, img2DescriptedKeypoints)
+  img1SSDKeypoints, img2SSDKeypoints = getBestMatchesByThreshold(sortedKeypointPairs)
+
+  print("-- Ratio Test Matches --")
+  img1RatioKeypoints, img2RatioKeypoints = getBestMatchesByRatioTest(img1DescriptedKeypoints, img2DescriptedKeypoints, sortedKeypointPairs)
+ 
+  print(f"All done in {(time.time() - startTime) * 1000}ms")
+
   cv.imshow("img1 SSD", annotateKeypoints(img1, img1SSDKeypoints))
   cv.imshow("img2 SSD", annotateKeypoints(img2, img2SSDKeypoints))
 
-  print("-- Ratio Test Matches --")
-  img1RatioKeypoints, img2RatioKeypoints = getBestMatchesByRatioTest(img1DescriptedKeypoints, img2DescriptedKeypoints)
   cv.imshow("img1 ratio", annotateKeypoints(img1, img1RatioKeypoints))
   cv.imshow("img2 ratio", annotateKeypoints(img2, img2RatioKeypoints))
 
