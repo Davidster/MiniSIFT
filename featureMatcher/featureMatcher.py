@@ -551,8 +551,8 @@ def getHomographyFromImages(img1Node, img2Node):
   # cv.imshow("img2 ratio", annotateKeypoints(img2, img2RatioKeypoints))
   
   finalHomography, finalImg1Inliers, finalImg2Inliers = doRANSAC(img1MatchedKeypoints, img2MatchedKeypoints, 500)
-  cv.imshow("drawnMatches", getDrawMatchesImg(img1Node["img"], img1MatchedKeypoints, img2Node["img"], img2MatchedKeypoints))
-  cv.imshow("drawnMatches inliers", getDrawMatchesImg(img1Node["img"], finalImg1Inliers, img2Node["img"], finalImg2Inliers))
+  # cv.imshow("drawnMatches", getDrawMatchesImg(img1Node["img"], img1MatchedKeypoints, img2Node["img"], img2MatchedKeypoints))
+  # cv.imshow("drawnMatches inliers", getDrawMatchesImg(img1Node["img"], finalImg1Inliers, img2Node["img"], finalImg2Inliers))
 
   return finalHomography
 
@@ -616,7 +616,6 @@ def stitchImageTree(imageTree, meanBlend = True):
   blendFunction = doMeanBlend
   if not meanBlend:
     blendFunction = doFirstSuccessBlend
-  print(f"meanBlend: {meanBlend}, blendFunction: {blendFunction}")
 
   global imageNodeList
   flattenImageTree(imageTree, imageNodeList)
@@ -625,7 +624,6 @@ def stitchImageTree(imageTree, meanBlend = True):
   projectedImageCorners = list(map(lambda node: getProjectedImageCorners(node["img"], node["h"]), imageNodeList))
   for cornerList in projectedImageCorners:
     allCorners = allCorners + cornerList
-  print(f"allCorners: {allCorners}")
   xValues = list(map(lambda corner: corner[0], allCorners))
   yValues = list(map(lambda corner: corner[1], allCorners))
   xMin = math.floor(np.amin(xValues))
@@ -634,8 +632,7 @@ def stitchImageTree(imageTree, meanBlend = True):
   yMax = math.ceil(np.amax(yValues))
   newImage = np.zeros((xMax - xMin, yMax - yMin, 3), np.uint8)
   totalPixelCount = newImage.shape[0] * newImage.shape[1]
-  print(f"newImage shape: {newImage.shape}")
-  print(f"offset: {(xMin, yMin)}")
+  print(f"Panorama shape: {newImage.shape}")
 
   startTime = time.time()
   # Runs at about 50 to 100 pixels/ms on Core i3 6100 (dual core + hyperthreading @ 3.7ghz)
@@ -650,7 +647,7 @@ def stitchImageTree(imageTree, meanBlend = True):
     for i, result in enumerate(blendedPoints):
       if not i == 0 and i % WORKER_CHUNK_SIZE == 0:
         secondsRemaining = (totalPixelCount - i) / (i / (time.time() - startTime)) # (remaining pixels) / (rate)
-        print(f"Done stiching {i} / {totalPixelCount} pixels (Done in: ~{secondsRemaining} seconds)")
+        print(f"Done stiching {i} / {totalPixelCount} pixels (ETA: ~{secondsRemaining} seconds)")
       if not result is None:
         point, value = result
         newImage[point[0] - xMin][point[1] - yMin] = value
@@ -714,8 +711,7 @@ if __name__== "__main__":
       { "img": cv.imread("image_sets/panorama/pano1_0008_2x.png") }
     ]
   }
-  # Rainier1.png -> Rainier2.png homography
-  # finalHomography = [[ 1.14430474e+00,  1.41475039e-01, -2.88250204e+01], [-4.96256056e-02,  1.24277991e+00, -1.93345058e+02], [-5.86168103e-05,  5.03821231e-04,  1.00000000e+00]]
+  # Rainier1.png -> Rainier2.png homography: [[ 1.14430474e+00,  1.41475039e-01, -2.88250204e+01], [-4.96256056e-02,  1.24277991e+00, -1.93345058e+02], [-5.86168103e-05,  5.03821231e-04,  1.00000000e+00]]
   rainerImageTree1 = {
     "img": cv.imread("image_sets/project_images/Rainier1.png"),
     "children": [
@@ -770,9 +766,9 @@ if __name__== "__main__":
 
   startTime = time.time()
   
-  imageTree = hangingImageTree
+  imageTree = rainerImageTree3
   computeImageTreeHomographies(imageTree)
-  # panorama = stitchImageTree(imageTree)
+  panorama = stitchImageTree(imageTree)
 
   # for panorama 2x:
   # computeImageTreeHomographies(panoImageTree)
@@ -791,5 +787,5 @@ if __name__== "__main__":
 
   print(f"Done end to end in {(time.time() - startTime) * 1000}ms")
 
-  # cv.imwrite("debug.jpg", panorama)
+  cv.imwrite("out.jpg", panorama)
   cv.waitKey(0)
