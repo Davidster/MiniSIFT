@@ -20,60 +20,33 @@ try:
 except:
   print(f"Could not get os.cpu_count(). Falling back on {THREADS} 'threads'.")
 
-##################################
-#                                #
-#       HARRIS KEYPOINTS         #
-#                                #
-##################################
+# basically a custom implementation of cv.drawKeypoints
+def annotateKeypoints(image, keypoints):
+  annotatedPointMap = {}
+  circleRadius = 8
+  circleInterleaver = 0
+  for keypoint in keypoints:
+    pos, val, angle, ringColor = keypoint
+    for circlePoint in getCircleAroundPoint(pos, circleRadius):
+      circlePoint = tuple(circlePoint) 
+      circleInterleaver += 1
+      if circlePoint not in annotatedPointMap or circleInterleaver % 2 == 0:
+        annotatedPointMap[circlePoint] = ringColor  
+    for linePoint in getLineFromPoint(pos, angle, circleRadius):
+      linePoint = tuple(linePoint)
+      annotatedPointMap[linePoint] = GREEN_PIXEL 
+       
+  for keypoint in keypoints:
+    pos, val, angle, ringColor = keypoint
+    annotatedPointMap[pos] = RED_PIXEL  
 
-def getNpGradient(image):
-  b, g, r = cv.split(image)
-  dxb, dyb = np.gradient(b)
-  dxg, dyg = np.gradient(g)
-  dxr, dyr = np.gradient(r)
-  return (mergeNpGradChannels(dxb, dxg, dxr),
-          mergeNpGradChannels(dyb, dyg, dyr))
-            
-# LOL
-def getNpGradient2(image):
-  return list(map(lambda dimension: mergeNpGradChannels(*dimension),
-            list(zip(*(map(lambda channel: np.gradient(channel), 
-                            cv.split(image)))))))
-
-def mergeNpGradChannels(db, dg, dr):
-  return cv.cvtColor(
-            cv.merge([db, dg, dr]).astype("float32"), 
-            cv.COLOR_RGB2GRAY)
-
-def applyGaussian(image, shape = (3, 3), sigma = 1):
-  return cv.GaussianBlur(image, shape, sigma, borderType=cv.BORDER_REFLECT_101)
-
-def computeCornerStrengths(aphg, imageshape):
-  with Pool(THREADS) as pool:
-    return np.reshape(list(pool.map(
-          computeCornerStrength,
-          list(map(lambda p: (aphg, p[0], p[1]), np.ndindex(imageshape[0], imageshape[1])))
-        )), 
-        (imageshape[0], imageshape[1])
-      ).astype("float32")
-
-def computeCornerStrength(args):
-  aphg, x, y = args
-  a = aphg[0][0][x][y]
-  b = aphg[0][1][x][y]
-  c = aphg[1][0][x][y]
-  d = aphg[1][1][x][y]
-  return (a * d - b * c) / ((a + d) + 0.00001)
-
-def isMaxAmongNeighbors(image, point):
-  pX, pY = point
-  if image[pX][pY] == 0:
-    return False
-  return image[pX, pY] >= np.amax(list(map(
-    lambda x: np.amax(list(map(
-      lambda y: image[x][y], 
-      range(max(pY - 1, 0), min(pY + 2, len(image[x])))))), 
-    range(max(pX - 1, 0), min(pX + 2, len(image))))))
+  annotatedImage = np.copy(image)
+  for x, row in enumerate(annotatedImage):
+    for y, point in enumerate(row):
+      pos = (x, y)
+      if pos in annotatedPointMap:
+        annotatedImage[x][y] = annotatedPointMap[pos]
+  return annotatedImage
 
 def getCircleAroundPoint(pos, radius):
   circ = radius * 2
@@ -105,6 +78,84 @@ def pilImageToPointArray(pilImage, imageShape):
       )
     )
   )
+
+def getNpGradient(image):
+  b, g, r = cv.split(image)
+  dxb, dyb = np.gradient(b)
+  dxg, dyg = np.gradient(g)
+  dxr, dyr = np.gradient(r)
+  return (mergeNpGradChannels(dxb, dxg, dxr),
+          mergeNpGradChannels(dyb, dyg, dyr))
+            
+# LOL
+def getNpGradient2(image):
+  return list(map(lambda dimension: mergeNpGradChannels(*dimension),
+            list(zip(*(map(lambda channel: np.gradient(channel), 
+                            cv.split(image)))))))
+
+def mergeNpGradChannels(db, dg, dr):
+  return cv.cvtColor(
+            cv.merge([db, dg, dr]).astype("float32"), 
+            cv.COLOR_RGB2GRAY)
+
+def convertToKeypointType(keypoints):
+  return list(map(lambda keypoint: cv.KeyPoint(keypoint[0][1], keypoint[0][0], 1), keypoints))
+
+def convertToPointType(keypoints):
+  return list(map(lambda keypoint: keypoint[0], keypoints))
+
+def getDrawMatchesImg(img1, img1Keypoints, img2, img2Keypoints):
+  return cv.drawMatches(
+    img1, 
+    convertToKeypointType(img1Keypoints), 
+    img2, 
+    convertToKeypointType(img2Keypoints), 
+    list(map(lambda i: cv.DMatch(i, i, 1), range(len(img1Keypoints)))),
+     None
+  )
+
+def getDrawKeypointsImg(img, keypoints):
+  return cv.drawKeypoints(
+    img, 
+    convertToKeypointType(keypoints),
+    None
+  )
+
+##################################
+#                                #
+#       HARRIS KEYPOINTS         #
+#                                #
+##################################
+
+def applyGaussian(image, shape = (3, 3), sigma = 1):
+  return cv.GaussianBlur(image, shape, sigma, borderType=cv.BORDER_REFLECT_101)
+
+def computeCornerStrengths(aphg, imageshape):
+  with Pool(THREADS) as pool:
+    return np.reshape(list(pool.map(
+          computeCornerStrength,
+          list(map(lambda p: (aphg, p[0], p[1]), np.ndindex(imageshape[0], imageshape[1])))
+        )), 
+        (imageshape[0], imageshape[1])
+      ).astype("float32")
+
+def computeCornerStrength(args):
+  aphg, x, y = args
+  a = aphg[0][0][x][y]
+  b = aphg[0][1][x][y]
+  c = aphg[1][0][x][y]
+  d = aphg[1][1][x][y]
+  return (a * d - b * c) / ((a + d) + 0.00001)
+
+def isMaxAmongNeighbors(image, point):
+  pX, pY = point
+  if image[pX][pY] == 0:
+    return False
+  return image[pX, pY] >= np.amax(list(map(
+    lambda x: np.amax(list(map(
+      lambda y: image[x][y], 
+      range(max(pY - 1, 0), min(pY + 2, len(image[x])))))), 
+    range(max(pX - 1, 0), min(pX + 2, len(image))))))
 
 def distance2D(a, b):
   dx = a[0] - b[0]
@@ -163,33 +214,6 @@ def computeHarrisKeypoints(image, gradient):
   print(f"Found {len(keypoints)} keypoints")
 
   return keypoints
-
-def annotateKeypoints(image, keypoints):
-  annotatedPointMap = {}
-  circleRadius = 8
-  circleInterleaver = 0
-  for keypoint in keypoints:
-    pos, val, angle, ringColor = keypoint
-    for circlePoint in getCircleAroundPoint(pos, circleRadius):
-      circlePoint = tuple(circlePoint) 
-      circleInterleaver += 1
-      if circlePoint not in annotatedPointMap or circleInterleaver % 2 == 0:
-        annotatedPointMap[circlePoint] = ringColor  
-    for linePoint in getLineFromPoint(pos, angle, circleRadius):
-      linePoint = tuple(linePoint)
-      annotatedPointMap[linePoint] = GREEN_PIXEL 
-       
-  for keypoint in keypoints:
-    pos, val, angle, ringColor = keypoint
-    annotatedPointMap[pos] = RED_PIXEL  
-
-  annotatedImage = np.copy(image)
-  for x, row in enumerate(annotatedImage):
-    for y, point in enumerate(row):
-      pos = (x, y)
-      if pos in annotatedPointMap:
-        annotatedImage[x][y] = annotatedPointMap[pos]
-  return annotatedImage
 
 ##################################
 #                                #
@@ -455,29 +479,6 @@ def computeInliers(img1Keypoints, img2Keypoints, h):
     if (distance < INLIER_THRESHOLD):
       inlierIndices.append(i)
   return inlierIndices
-
-def convertToKeypointType(keypoints):
-  return list(map(lambda keypoint: cv.KeyPoint(keypoint[0][1], keypoint[0][0], 1), keypoints))
-
-def convertToPointType(keypoints):
-  return list(map(lambda keypoint: keypoint[0], keypoints))
-
-def getDrawMatchesImg(img1, img1Keypoints, img2, img2Keypoints):
-  return cv.drawMatches(
-    img1, 
-    convertToKeypointType(img1Keypoints), 
-    img2, 
-    convertToKeypointType(img2Keypoints), 
-    list(map(lambda i: cv.DMatch(i, i, 1), range(len(img1Keypoints)))),
-     None
-  )
-
-def getDrawKeypointsImg(img, keypoints):
-  return cv.drawKeypoints(
-    img, 
-    convertToKeypointType(keypoints),
-    None
-  )
 
 def getHomographyFromKeypoints(img1Keypoints, img2Keypoints):
   img1Points, img2Points = np.float32((convertToPointType(img1Keypoints), convertToPointType(img2Keypoints)))
@@ -756,6 +757,12 @@ if __name__== "__main__":
       }
     ]
   }
+  mtlImageTree = {
+    "img": cv.imread("image_sets/mtl/left.jpg"),
+    "children": [
+      { "img":cv.imread("image_sets/mtl/right.jpg") }
+    ]
+  }
   lookoutImageTree = {
     "img": cv.imread("image_sets/lookout/2.jpg"),
     "children": [
@@ -782,25 +789,6 @@ if __name__== "__main__":
   }
 
   startTime = time.time()
-  
-  imageTree = rainierImageTree3
-  computeImageTreeHomographies(imageTree)
-  panorama = stitchImageTree(imageTree)
-
-  # for panorama 2x:
-  # computeImageTreeHomographies(panoImageTree)
-  # panoImageTree2X["h"] = None
-  # panoImageTree2X["children"][0]["h"] = panoImageTree["children"][0]["h"] * buildScaleFixer(panoImageTree2X["children"][0]["img"], panoImageTree["children"][0]["img"])
-  # panorama = stitchImageTree(panoImageTree2X, meanBlend = False)
-
-  # for HD lookout:
-  # computeImageTreeHomographies(lookoutImageTree)
-  # scaleFixer = buildScaleFixer(lookoutImageTreeHD["img"], lookoutImageTree["img"])
-  # lookoutImageTreeHD["h"] = None
-  # lookoutImageTreeHD["children"][0]["h"] = lookoutImageTree["children"][0]["h"] * scaleFixer
-  # lookoutImageTreeHD["children"][1]["h"] = lookoutImageTree["children"][1]["h"] * scaleFixer
-  # lookoutImageTreeHD["children"][1]["children"][0]["h"] = lookoutImageTree["children"][1]["children"][0]["h"] * scaleFixer
-  # panorama = stitchImageTree(lookoutImageTreeHD, meanBlend = True)
 
   # # PROJECT REQUIREMENTS:
 
@@ -840,6 +828,25 @@ if __name__== "__main__":
   #     { "img": rainier2Img, "h": rainier1to2Homography }
   #   ]
   # }))
+
+  imageTree = rainierImageTree3
+  computeImageTreeHomographies(imageTree)
+  panorama = stitchImageTree(imageTree)
+
+  # for panorama 2x:
+  # computeImageTreeHomographies(panoImageTree)
+  # panoImageTree2X["h"] = None
+  # panoImageTree2X["children"][0]["h"] = panoImageTree["children"][0]["h"] * buildScaleFixer(panoImageTree2X["children"][0]["img"], panoImageTree["children"][0]["img"])
+  # panorama = stitchImageTree(panoImageTree2X, meanBlend = False)
+
+  # for HD lookout:
+  # computeImageTreeHomographies(lookoutImageTree)
+  # scaleFixer = buildScaleFixer(lookoutImageTreeHD["img"], lookoutImageTree["img"])
+  # lookoutImageTreeHD["h"] = None
+  # lookoutImageTreeHD["children"][0]["h"] = lookoutImageTree["children"][0]["h"] * scaleFixer
+  # lookoutImageTreeHD["children"][1]["h"] = lookoutImageTree["children"][1]["h"] * scaleFixer
+  # lookoutImageTreeHD["children"][1]["children"][0]["h"] = lookoutImageTree["children"][1]["children"][0]["h"] * scaleFixer
+  # panorama = stitchImageTree(lookoutImageTreeHD, meanBlend = True)
 
   print(f"Done end to end in {(time.time() - startTime) * 1000}ms")
 
