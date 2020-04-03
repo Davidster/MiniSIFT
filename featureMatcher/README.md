@@ -17,9 +17,9 @@ Core i3 6100 (dual core + hyperthreading @ 3.7ghz) CPU
 
 - See folder `results/`
 - See rainier images all stitched in `results/extra/rainierImageTree.jpg`
-- See panoramas from some photos I took from my phone:
-- Mtl panorama: source images in `results/extra/mtl`, panoramas in `results/extra/mtlImageTree.jpg`
-- Lookout panorama: source images in `results/extra/lookout`, panoramas in `results/extra/lookoutImageTree.jpg`, `results/extra/lookoutNoBlendCroppedScaled.jpg`
+- I took some images from my phone: Mtl panorama and Lookout panorama
+- Mtl panorama: source images in `results/extra/mtl`, panoramas in `results/extra/mtlImageTree.jpg`. Mean blending was enabled for this one.
+- Lookout panorama: source images in `results/extra/lookout`, panoramas in `results/extra/lookoutImageTree.jpg`, `results/extra/lookoutNoBlendCroppedScaled.jpg`. Mean blending was disabled for this one. I ran it in high-resolution by computing the homographies in low-res first, then applying them in high-res.
 
 ## How it works
 
