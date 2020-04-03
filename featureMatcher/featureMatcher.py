@@ -111,8 +111,7 @@ def distance2D(a, b):
   dy = a[1] - b[1]
   return math.sqrt(dx * dx + dy * dy)
 
-MAX_KEYPOINTS_PER_IMAGE = 750
-def computeHarrisKeypoints(image, gradient):
+def computeHarrisResponse(image, gradient):
   dx, dy = gradient
 
   # Build harris matrix
@@ -126,9 +125,13 @@ def computeHarrisKeypoints(image, gradient):
     map(lambda row: list(map(lambda ele: applyGaussian(ele), row)), allPointsHarris)
   ))
 
+  return computeCornerStrengths(allPointsHarrisWGaussian.astype("float32"), image.shape)
+
+MAX_KEYPOINTS_PER_IMAGE = 750
+def computeHarrisKeypoints(image, gradient):
   # Compute corner strenths and threshold
   startTime = time.time()
-  harrisCornerStrengthImage = computeCornerStrengths(allPointsHarrisWGaussian.astype("float32"), image.shape)
+  harrisCornerStrengthImage = computeHarrisResponse(image, gradient)
   maxCornerStrength = np.amax(harrisCornerStrengthImage)
   # cv.imshow("nonethresholded", harrisCornerStrengthImage / 100)
   thresholded = (harrisCornerStrengthImage > maxCornerStrength * 0.2) * harrisCornerStrengthImage
@@ -469,6 +472,13 @@ def getDrawMatchesImg(img1, img1Keypoints, img2, img2Keypoints):
      None
   )
 
+def getDrawKeypointsImg(img, keypoints):
+  return cv.drawKeypoints(
+    img, 
+    convertToKeypointType(keypoints),
+    None
+  )
+
 def getHomographyFromKeypoints(img1Keypoints, img2Keypoints):
   img1Points, img2Points = np.float32((convertToPointType(img1Keypoints), convertToPointType(img2Keypoints)))
   h, _ = cv.findHomography(img1Points, img2Points, 0)
@@ -719,20 +729,20 @@ if __name__== "__main__":
     ]
   }
   # Rainier1.png -> Rainier2.png homography: [[ 1.14430474e+00,  1.41475039e-01, -2.88250204e+01], [-4.96256056e-02,  1.24277991e+00, -1.93345058e+02], [-5.86168103e-05,  5.03821231e-04,  1.00000000e+00]]
-  rainerImageTree1 = {
+  rainierImageTree1 = {
     "img": cv.imread("image_sets/project_images/Rainier1.png"),
     "children": [
       { "img": cv.imread("image_sets/project_images/Rainier2.png") }
     ]
   }
-  rainerImageTree2 = {
+  rainierImageTree2 = {
     "img": cv.imread("image_sets/project_images/Rainier1.png"),
     "children": [
       { "img": cv.imread("image_sets/project_images/Rainier2.png") },
       { "img": cv.imread("image_sets/project_images/Rainier3.png") }
     ]
   }
-  rainerImageTree3 = {
+  rainierImageTree3 = {
     "img": cv.imread("image_sets/project_images/Rainier1.png"),
     "children": [
       { "img": cv.imread("image_sets/project_images/Rainier2.png") },
@@ -773,7 +783,7 @@ if __name__== "__main__":
 
   startTime = time.time()
   
-  imageTree = rainerImageTree3
+  imageTree = rainierImageTree3
   computeImageTreeHomographies(imageTree)
   panorama = stitchImageTree(imageTree)
 
@@ -791,6 +801,45 @@ if __name__== "__main__":
   # lookoutImageTreeHD["children"][1]["h"] = lookoutImageTree["children"][1]["h"] * scaleFixer
   # lookoutImageTreeHD["children"][1]["children"][0]["h"] = lookoutImageTree["children"][1]["children"][0]["h"] * scaleFixer
   # panorama = stitchImageTree(lookoutImageTreeHD, meanBlend = True)
+
+  # # PROJECT REQUIREMENTS:
+
+  # # Requirement 1
+  # # a
+  # boxesImg = cv.imread("image_sets/project_images/Boxes.png")
+  # boxesGradient = getNpGradient2(boxesImg)
+  # boxesHarrisResponse = computeHarrisResponse(boxesImg, boxesGradient)
+  # cv.imwrite("results/1a.png", boxesHarrisResponse)
+  # # b
+  # rainier1Img = cv.imread("image_sets/project_images/Rainier1.png")
+  # rainier1Gradient = getNpGradient2(rainier1Img)
+  # rainier1HarrisKeypoints = computeHarrisKeypoints(rainier1Img, rainier1Gradient)
+  # cv.imwrite("results/1b.png", getDrawKeypointsImg(rainier1Img, rainier1HarrisKeypoints))
+  # # c
+  # rainier2Img = cv.imread("image_sets/project_images/Rainier2.png")
+  # rainier2Gradient = getNpGradient2(rainier2Img)
+  # rainier2HarrisKeypoints = computeHarrisKeypoints(rainier2Img, rainier2Gradient)
+  # cv.imwrite("results/1c.png", getDrawKeypointsImg(rainier2Img, rainier2HarrisKeypoints))
+
+  # # Requirement 2
+  # rainier1SIFTKeypoints = getKeypointDescriptors(rainier1Img, rainier1Gradient, rainier1HarrisKeypoints)
+  # rainier2SIFTKeypoints = getKeypointDescriptors(rainier2Img, rainier2Gradient, rainier2HarrisKeypoints)
+  # rainierSortedKeypointPairs = getSortedKeypointPairs(rainier1SIFTKeypoints, rainier2SIFTKeypoints)
+  # rainier1MatchedKeypoints, rainier2MatchedKeypoints = getBestMatchesByRatioTest(rainier1SIFTKeypoints, rainier2SIFTKeypoints, rainierSortedKeypointPairs)
+  # cv.imwrite("results/2.png", getDrawMatchesImg(rainier1Img, rainier1MatchedKeypoints, rainier2Img, rainier2MatchedKeypoints))
+
+  # # Requirement 3
+  # rainier1to2Homography, rainier1Inliers, rainier2Inliers = doRANSAC(rainier1MatchedKeypoints, rainier2MatchedKeypoints, 500)
+  # cv.imwrite("results/3.png", getDrawMatchesImg(rainier1Img, rainier1Inliers, rainier2Img, rainier2Inliers))
+
+  # # Requirement 4
+  # cv.imwrite("results/4.png", stitchImageTree({
+  #   "img": rainier1Img,
+  #   "h": None,
+  #   "children": [
+  #     { "img": rainier2Img, "h": rainier1to2Homography }
+  #   ]
+  # }))
 
   print(f"Done end to end in {(time.time() - startTime) * 1000}ms")
 
