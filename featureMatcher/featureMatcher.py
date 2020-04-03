@@ -10,16 +10,6 @@ import itertools
 import os
 from PIL import Image, ImageDraw
 
-# sobelFilterScale = 1/8
-# sobelFilterX = np.array([
-#   [-1,  0,  1], 
-#   [-2,  0,  2], 
-#   [-1,  0,  1]]) * sobelFilterScale
-# sobelFilterY = np.array([
-#   [ 1,  2,  1], 
-#   [ 0,  0,  0], 
-#   [-1, -2, -1]]) * sobelFilterScale
-
 RED_PIXEL = np.array([0, 0, 255]).astype("uint8")
 BLUE_PIXEL = np.array([255, 0, 0]).astype("uint8")
 GREEN_PIXEL = np.array([0, 255, 0]).astype("uint8")
@@ -30,18 +20,11 @@ try:
 except:
   print(f"Could not get os.cpu_count(). Falling back on {THREADS} 'threads'.")
 
-# def applyFilter(image, filter):
-#   return cv.filter2D(image, -1, filter, borderType=cv.BORDER_ISOLATED)
-
-# def getSobelGradient(image):
-#   return (
-#     applySobel(image, sobelFilterX).astype("float32"),
-#     applySobel(image, sobelFilterY).astype("float32"))
-
-# def applySobel(image, singleDimensionFilter):
-#   return cv.cvtColor(
-#     applyFilter(image, singleDimensionFilter), 
-#     cv.COLOR_RGB2GRAY)
+##################################
+#                                #
+#       HARRIS KEYPOINTS         #
+#                                #
+##################################
 
 def getNpGradient(image):
   b, g, r = cv.split(image)
@@ -205,6 +188,12 @@ def annotateKeypoints(image, keypoints):
         annotatedImage[x][y] = annotatedPointMap[pos]
   return annotatedImage
 
+##################################
+#                                #
+#     SIFT-LIKE DESCRIPTORS      #
+#                                #
+##################################
+
 # Adapted from https://stackoverflow.com/questions/717762/how-to-calculate-the-vertex-of-a-parabola-given-three-points
 def getParabolaVertex(p1, p2, p3):
   x1, y1 = p1
@@ -309,6 +298,12 @@ def getKeypointDescriptors(image, gradient, keypoints):
   print(f"Computed {len(keypoints)} descriptors in {(time.time() - startTime) * 1000}ms")
   print(f"New keypoint count: {len(newKeypoints)}")
   return newKeypoints
+
+##################################
+#                                #
+#       KEYPOINT MATCHING        #
+#                                #
+##################################
 
 def computePointDistance(a, b):
   diff = np.array(list(a)) - np.array(list(b))
@@ -433,6 +428,12 @@ def pointNearBoundary(point, imageShape):
     y > imageShape[1] - SIFT_WINDOWSIZE
   )
 
+##################################
+#                                #
+#            RANSAC              #
+#                                #
+##################################
+
 def project(point, h):
   if h is None:
     return point
@@ -555,6 +556,12 @@ def getHomographyFromImages(img1Node, img2Node):
   # cv.imshow("drawnMatches inliers", getDrawMatchesImg(img1Node["img"], finalImg1Inliers, img2Node["img"], finalImg2Inliers))
 
   return finalHomography
+
+##################################
+#                                #
+#     IMAGE STCHING/BLENDING     #
+#                                #
+##################################
 
 def getImageCorners(img):
   return [
