@@ -10,38 +10,38 @@ import itertools
 import os
 from PIL import Image, ImageDraw
 
-sobelFilterScale = 1/8
-sobelFilterX = np.array([
-  [-1,  0,  1], 
-  [-2,  0,  2], 
-  [-1,  0,  1]]) * sobelFilterScale
-sobelFilterY = np.array([
-  [ 1,  2,  1], 
-  [ 0,  0,  0], 
-  [-1, -2, -1]]) * sobelFilterScale
+# sobelFilterScale = 1/8
+# sobelFilterX = np.array([
+#   [-1,  0,  1], 
+#   [-2,  0,  2], 
+#   [-1,  0,  1]]) * sobelFilterScale
+# sobelFilterY = np.array([
+#   [ 1,  2,  1], 
+#   [ 0,  0,  0], 
+#   [-1, -2, -1]]) * sobelFilterScale
 
 RED_PIXEL = np.array([0, 0, 255]).astype("uint8")
 BLUE_PIXEL = np.array([255, 0, 0]).astype("uint8")
 GREEN_PIXEL = np.array([0, 255, 0]).astype("uint8")
 
-THREADS = 6
+THREADS = 3
 try:
   THREADS = os.cpu_count() * 2
 except:
-  print("Could not get os.cpu_count(). Falling back on 6 threads.")
+  print(f"Could not get os.cpu_count(). Falling back on {THREADS} 'threads'.")
 
-def applyFilter(image, filter):
-  return cv.filter2D(image, -1, filter, borderType=cv.BORDER_ISOLATED)
+# def applyFilter(image, filter):
+#   return cv.filter2D(image, -1, filter, borderType=cv.BORDER_ISOLATED)
 
-def getSobelGradient(image):
-  return (
-    applySobel(image, sobelFilterX).astype("float32"),
-    applySobel(image, sobelFilterY).astype("float32"))
+# def getSobelGradient(image):
+#   return (
+#     applySobel(image, sobelFilterX).astype("float32"),
+#     applySobel(image, sobelFilterY).astype("float32"))
 
-def applySobel(image, singleDimensionFilter):
-  return cv.cvtColor(
-    applyFilter(image, singleDimensionFilter), 
-    cv.COLOR_RGB2GRAY)
+# def applySobel(image, singleDimensionFilter):
+#   return cv.cvtColor(
+#     applyFilter(image, singleDimensionFilter), 
+#     cv.COLOR_RGB2GRAY)
 
 def getNpGradient(image):
   b, g, r = cv.split(image)
@@ -227,24 +227,19 @@ def getKeypointOrientation(keypoint, imageShape, gradientMagnitudes, gradientDir
 
   gradientDirections = (gradientDirections + (math.pi * 2)) % (math.pi * 2)
 
-  # print(keypoint)
-  # print(neighborhood)
   binCount = 10
   orientationVoteCounts = np.zeros(binCount)
-  # print(orientationVoteCounts)
   for x in range(neighborhood[0][0], neighborhood[1][0]):
     for y in range(neighborhood[0][1], neighborhood[1][1]):
       binIndex = math.floor(binCount * gradientDirections[x][y] / (math.pi * 2))
       gaussianFactor = ORIENTATION_GAUSSIAN[x - keypointX] * ORIENTATION_GAUSSIAN[y - keypointY]
       orientationVoteCounts[binIndex] += gaussianFactor * gradientMagnitudes[x][y]
-  # print(orientationVoteCounts)
 
   dominantBinValue = np.amax(orientationVoteCounts)
   peakBinIndices, peakBinValues = map(list, zip(*list(filter(
     lambda vc: vc[1] > dominantBinValue * 0.8,
     list(enumerate(orientationVoteCounts))
   ))))
-  # print(peakBinIndices)
 
   orientedKeypoints = []
   for peakBinIndex in peakBinIndices:
@@ -295,14 +290,12 @@ def getKeypointDescriptor(keypoint, imageShape, gradientMagnitudes, gradientDire
 
 def getKeypointDescriptors(image, gradient, keypoints):
   dx, dy = gradient
-  # dx, dy = getNpGradient2(applyGaussian(image))
   startTime = time.time()
   gradientMagnitudes = np.sqrt(dx * dx + dy * dy)
   gradientDirections = np.arctan2(dy, dx) + math.pi
   newKeypoints = []
   count = 0
   for keypoint in keypoints:
-    # startTime = time.time()
     orientedKeypoints = getKeypointOrientation(keypoint, image.shape, gradientMagnitudes, gradientDirections)
     descriptedKeypoints = list(map(
       lambda kp: getKeypointDescriptor(kp, image.shape, gradientMagnitudes, gradientDirections),
@@ -316,6 +309,10 @@ def getKeypointDescriptors(image, gradient, keypoints):
   print(f"Computed {len(keypoints)} descriptors in {(time.time() - startTime) * 1000}ms")
   print(f"New keypoint count: {len(newKeypoints)}")
   return newKeypoints
+
+def computePointDistance(a, b):
+  diff = np.array(list(a)) - np.array(list(b))
+  return np.sqrt(np.sum(diff * diff))
 
 def computeDistance(args):
   keypoint1, keypoint2 = args
@@ -336,14 +333,6 @@ def getSortedKeypointPairs(img1Keypoints, img2Keypoints):
       if i % WORKER_CHUNK_SIZE == 0:
         print(f"Computed {i} / {len(img1Keypoints) * len(img2Keypoints)} keypoint distances")
       allPairs.append(result)
-  # count = 0
-  # for img1Keypoint in img1Keypoints:
-  #   for img2Keypoint in img2Keypoints:
-  #     diff = np.array(img2Keypoint[3]) - np.array(img1Keypoint[3])
-  #     allPairs.append((img1Keypoint[:3], img2Keypoint[:3], np.sqrt(np.sum(diff * diff))))
-  #     count += 1
-  #     if count % 20000 == 0:
-  #       print(f"Computed {count} / {len(img1Keypoints) * len(img2Keypoints)} keypoint distances")
   print(f"Computed {len(img1Keypoints) * len(img2Keypoints)} keypoint distances in {(time.time() - startTime) * 1000}ms")
 
   startTime = time.time()
@@ -353,7 +342,7 @@ def getSortedKeypointPairs(img1Keypoints, img2Keypoints):
 
 def getBestMatchesByThreshold(sortedKeypointPairs):
   startTime = time.time()
-  maxDistance = 0.75
+  maxDistance = 0.7
   topMatches = list(filter(lambda match: match[2] < maxDistance, sortedKeypointPairs))
   topMatches = dedupePoints(topMatches)
 
@@ -385,7 +374,8 @@ def getBestMatchesByRatioTest(img1Keypoints, img2Keypoints, sortedKeypointPairs)
 
   startTime = time.time()
   sortedRatioMatches = sorted(ratioMatches, key=lambda pair: pair[2])
-  maxDistance = 0.9
+  # maxDistance = 0.95 # for myRoomRotated
+  maxDistance = 0.85
   topMatches = list(filter(lambda match: match[2] < maxDistance, sortedRatioMatches))
   topMatches = dedupePoints(topMatches)
 
@@ -443,51 +433,363 @@ def pointNearBoundary(point, imageShape):
     y > imageShape[1] - SIFT_WINDOWSIZE
   )
 
+def project(point, h):
+  if h is None:
+    return point
+  x, y = point
+  denominator = (h[2][0] * x + h[2][1] * y + h[2][2]) + 0.00001
+  return (
+    (h[0][0] * x + h[0][1] * y + h[0][2]) / denominator,
+    (h[1][0] * x + h[1][1] * y + h[1][2]) / denominator
+  )
+
+INLIER_THRESHOLD = 5
+def computeInliers(img1Keypoints, img2Keypoints, h):
+  inlierIndices = []
+  for i, img1Keypoint in enumerate(img1Keypoints):
+    distance = computePointDistance(project(img1Keypoint[0], h), img2Keypoints[i][0])
+    if (distance < INLIER_THRESHOLD):
+      inlierIndices.append(i)
+  return inlierIndices
+
+def convertToKeypointType(keypoints):
+  return list(map(lambda keypoint: cv.KeyPoint(keypoint[0][1], keypoint[0][0], 1), keypoints))
+
+def convertToPointType(keypoints):
+  return list(map(lambda keypoint: keypoint[0], keypoints))
+
+def getDrawMatchesImg(img1, img1Keypoints, img2, img2Keypoints):
+  return cv.drawMatches(
+    img1, 
+    convertToKeypointType(img1Keypoints), 
+    img2, 
+    convertToKeypointType(img2Keypoints), 
+    list(map(lambda i: cv.DMatch(i, i, 1), range(len(img1Keypoints)))),
+     None
+  )
+
+def getHomographyFromKeypoints(img1Keypoints, img2Keypoints):
+  img1Points, img2Points = np.float32((convertToPointType(img1Keypoints), convertToPointType(img2Keypoints)))
+  h, _ = cv.findHomography(img1Points, img2Points, 0)
+  return h
+
+def doRANSAC(img1Keypoints, img2Keypoints, numIterations):
+  startTime = time.time()
+
+  pointCount = len(img1Keypoints)
+  numberOfPossibleQuadruples = int(math.factorial(pointCount) / (math.factorial(pointCount - 4) * math.factorial(4)))
+  numIterations = min(numIterations, numberOfPossibleQuadruples)
+  chosenIndexQuadruples = set()
+  results = []
+  for _ in range(numIterations):
+    
+    randomIndices = None
+    while True:
+      randomIndices = random.sample(range(0, len(img1Keypoints)), 4)
+      if not tuple(randomIndices) in chosenIndexQuadruples:
+        chosenIndexQuadruples.add(tuple(randomIndices))
+        break
+    
+    h = getHomographyFromKeypoints(
+      list(map(lambda i: img1Keypoints[i], randomIndices)), 
+      list(map(lambda i: img2Keypoints[i], randomIndices))
+    )
+    inliers = computeInliers(img1Keypoints, img2Keypoints, h)
+    results.append((h, inliers))
+
+  resultsSorted = sorted(results, key=lambda result: len(result[1]), reverse=True)
+  
+  print(f"Done RANSAC in {(time.time() - startTime) * 1000}ms")
+  print(f"Best quadruplet found produced {len(resultsSorted[0][1])} inliers")
+
+  finalImg1Inliers = list(map(lambda i: img1Keypoints[i], resultsSorted[0][1]))
+  finalImg2Inliers = list(map(lambda i: img2Keypoints[i], resultsSorted[0][1]))
+
+  finalHomography = getHomographyFromKeypoints(finalImg1Inliers, finalImg2Inliers)
+
+  return (
+    finalHomography,
+    finalImg1Inliers,
+    finalImg2Inliers
+  )
+
+def doSIFT(imgNode):
+  imgKeypoints = None
+  if "keypoints" in imgNode:
+    imgKeypoints = imgNode["keypoints"]
+
+  if imgKeypoints is None:
+    print("-- Harris keypoints --")
+    imgGradient = getNpGradient2(imgNode["img"])
+    imgHarrisKeypoints = computeHarrisKeypoints(imgNode["img"], imgGradient)
+    print("-- SIFT Descriptors --")
+    imgKeypoints = getKeypointDescriptors(imgNode["img"], imgGradient, imgHarrisKeypoints)
+    imgNode["keypoints"] = imgKeypoints
+  else:
+    print("Keypoints already computed. Skipping this step")
+
+def getHomographyFromImages(img1Node, img2Node):
+  print("-- Image 1 --")
+  doSIFT(img1Node)
+  print("-- Image 2 --")
+  doSIFT(img2Node)
+
+  print("-- Matching keypoints --")
+  sortedKeypointPairs = getSortedKeypointPairs(img1Node["keypoints"], img2Node["keypoints"])
+
+  # print("-- SSD Matches --")
+  # img1MatchedKeypoints, img2MatchedKeypoints = getBestMatchesByThreshold(sortedKeypointPairs)
+
+  print("-- Ratio Test Matches --")
+  img1MatchedKeypoints, img2MatchedKeypoints = getBestMatchesByRatioTest(img1Node["keypoints"], img2Node["keypoints"], sortedKeypointPairs)
+
+  # cv.imshow("img1 ratio", annotateKeypoints(img1, img1RatioKeypoints))
+  # cv.imshow("img2 ratio", annotateKeypoints(img2, img2RatioKeypoints))
+  # cv.imshow("img1 SSD", annotateKeypoints(img1, img1SSDKeypoints))
+  # cv.imshow("img2 SSD", annotateKeypoints(img2, img2SSDKeypoints))
+  # cv.imshow("img1 ratio", annotateKeypoints(img1, img1RatioKeypoints))
+  # cv.imshow("img2 ratio", annotateKeypoints(img2, img2RatioKeypoints))
+  
+  finalHomography, finalImg1Inliers, finalImg2Inliers = doRANSAC(img1MatchedKeypoints, img2MatchedKeypoints, 500)
+  cv.imshow("drawnMatches", getDrawMatchesImg(img1Node["img"], img1MatchedKeypoints, img2Node["img"], img2MatchedKeypoints))
+  cv.imshow("drawnMatches inliers", getDrawMatchesImg(img1Node["img"], finalImg1Inliers, img2Node["img"], finalImg2Inliers))
+
+  return finalHomography
+
+def getImageCorners(img):
+  return [
+    (0, 0),            (img.shape[0], 0), 
+    (0, img.shape[1]), (img.shape[0], img.shape[1]) 
+  ]
+
+def getProjectedImageCorners(img, h):
+  if h is None:
+    return getImageCorners(img)
+  hInv = np.linalg.inv(h)
+  return list(map(lambda corner: project(corner, hInv), getImageCorners(img)))
+
+def computeImageTreeHomographies(node, parentNode = None):
+  if parentNode is None:
+    node["h"] = None
+  else:
+    h = getHomographyFromImages(parentNode, node)
+    if not parentNode["h"] is None:
+      node["h"] = np.matmul(h, parentNode["h"])
+    else:
+      node["h"] = h
+  if "children" in node:
+    for child in node["children"]:
+      computeImageTreeHomographies(child, parentNode = node)
+
+# imageList is output reference
+def flattenImageTree(node, imageList):
+  imageList.append(node)
+  if "children" in node:
+    for child in node["children"]:
+      flattenImageTree(child, imageList)
+
+def tryToProjectNode(point, node):
+  projX, projY = project(point, node["h"])
+  if projX > 0 and projX < node["img"].shape[0] and projY > 0 and projY < node["img"].shape[1]:
+    return cv.getRectSubPix(node["img"], (1, 1), (projY, projX))[0][0]
+
+imageNodeList = []
+def doMeanBlend(point):
+  successfulProjections = []
+  for node in imageNodeList:
+    projection = tryToProjectNode(point, node)
+    if not projection is None:
+      successfulProjections.append(projection)
+  if len(successfulProjections) == 1:
+    return (point, successfulProjections[0])
+  elif len(successfulProjections) > 1:
+    return (point, np.mean(np.array(successfulProjections), axis=0))
+
+def doFirstSuccessBlend(point):
+  successfulProjections = []
+  for node in imageNodeList:
+    projection = tryToProjectNode(point, node)
+    if not projection is None:
+      return (point, projection)
+  
+def stitchImageTree(imageTree, meanBlend = True):
+  blendFunction = doMeanBlend
+  if not meanBlend:
+    blendFunction = doFirstSuccessBlend
+  print(f"meanBlend: {meanBlend}, blendFunction: {blendFunction}")
+
+  global imageNodeList
+  flattenImageTree(imageTree, imageNodeList)
+
+  allCorners = []
+  projectedImageCorners = list(map(lambda node: getProjectedImageCorners(node["img"], node["h"]), imageNodeList))
+  for cornerList in projectedImageCorners:
+    allCorners = allCorners + cornerList
+  print(f"allCorners: {allCorners}")
+  xValues = list(map(lambda corner: corner[0], allCorners))
+  yValues = list(map(lambda corner: corner[1], allCorners))
+  xMin = math.floor(np.amin(xValues))
+  xMax = math.ceil(np.amax(xValues))
+  yMin = math.floor(np.amin(yValues))
+  yMax = math.ceil(np.amax(yValues))
+  newImage = np.zeros((xMax - xMin, yMax - yMin, 3), np.uint8)
+  totalPixelCount = newImage.shape[0] * newImage.shape[1]
+  print(f"newImage shape: {newImage.shape}")
+  print(f"offset: {(xMin, yMin)}")
+
+  startTime = time.time()
+  # Runs at about 50 to 100 pixels/ms on Core i3 6100 (dual core + hyperthreading @ 3.7ghz)
+  with Pool(THREADS) as pool:
+    blendedPoints = pool.imap_unordered(
+      blendFunction,
+      map(
+        lambda point: (point[0] + xMin, point[1] + yMin),
+        itertools.product(range(newImage.shape[0]), range(newImage.shape[1]))),
+      WORKER_CHUNK_SIZE
+    )
+    for i, result in enumerate(blendedPoints):
+      if not i == 0 and i % WORKER_CHUNK_SIZE == 0:
+        secondsRemaining = (totalPixelCount - i) / (i / (time.time() - startTime)) # (remaining pixels) / (rate)
+        print(f"Done stiching {i} / {totalPixelCount} pixels (Done in: ~{secondsRemaining} seconds)")
+      if not result is None:
+        point, value = result
+        newImage[point[0] - xMin][point[1] - yMin] = value
+
+  print(f"Done stiching {totalPixelCount} pixels in {(time.time() - startTime) * 1000}ms")
+  
+  return newImage
+
+def buildScaleFixer(img1, img2):
+  s = img1.shape[0] / img2.shape[0]
+  return np.array([
+    [ 1,   1,   s ],
+    [ 1,   1,   s ],
+    [ 1/s, 1/s, 1 ]
+  ])
+    
 if __name__== "__main__":
-  # img1 = cv.imread("image_sets/graf/img1.ppm")
-  # img2 = cv.imread("image_sets/graf/img2.ppm")
-  # img1 = cv.imread("image_sets/panorama/pano1_0009.png")
-  # img2 = cv.imread("image_sets/panorama/pano1_0008.png")
   # img1 = cv.imread("image_sets/yosemite/Yosemite1.jpg")
   # img2 = cv.imread("image_sets/yosemite/Yosemite2.jpg")
   # img1 = cv.imread("image_sets/myroom/left.jpg")
   # img2 = cv.imread("image_sets/myroom/right.jpg")
   # img1 = cv.imread("image_sets/myroom/straight.jpg")
   # img2 = cv.imread("image_sets/myroom/rotated.jpg")
-  img1 = cv.imread("image_sets/mtl/left.jpg")
-  img2 = cv.imread("image_sets/mtl/right.jpg")
+  # img1 = cv.imread("image_sets/mtl/left.jpg")
+  # img2 = cv.imread("image_sets/mtl/right.jpg")
+  # img1 = cv.imread("image_sets/project_images/ND1.png")
+  # img2 = cv.imread("image_sets/project_images/ND2.png")
+  myRoomImageTree = {
+    "img": cv.imread("image_sets/myroom/left.jpg"),
+    "children": [
+      { "img":cv.imread("image_sets/myroom/right.jpg") }
+    ]
+  }
+  myRoomRotatedImageTree = {
+    "img": cv.imread("image_sets/myroom/straight.jpg"),
+    "children": [
+      { "img":cv.imread("image_sets/myroom/rotated.jpg") }
+    ]
+  }
+  hangingImageTree = {
+    "img": cv.imread("image_sets/project_images/Hanging1.png"),
+    "children": [
+      { "img":cv.imread("image_sets/project_images/Hanging2.png") }
+    ]
+  }
+  grafImageTree = {
+    "img": cv.imread("image_sets/graf/img1.ppm"),
+    "children": [
+      { "img": cv.imread("image_sets/graf/img2.ppm") }
+    ]
+  }
+  panoImageTree = {
+    "img": cv.imread("image_sets/panorama/pano1_0009.png"),
+    "children": [
+      { "img": cv.imread("image_sets/panorama/pano1_0008.png") }
+    ]
+  }
+  panoImageTree2X = {
+    "img": cv.imread("image_sets/panorama/pano1_0009_2x.png"),
+    "children": [
+      { "img": cv.imread("image_sets/panorama/pano1_0008_2x.png") }
+    ]
+  }
+  # Rainier1.png -> Rainier2.png homography
+  # finalHomography = [[ 1.14430474e+00,  1.41475039e-01, -2.88250204e+01], [-4.96256056e-02,  1.24277991e+00, -1.93345058e+02], [-5.86168103e-05,  5.03821231e-04,  1.00000000e+00]]
+  rainerImageTree1 = {
+    "img": cv.imread("image_sets/project_images/Rainier1.png"),
+    "children": [
+      { "img": cv.imread("image_sets/project_images/Rainier2.png") }
+    ]
+  }
+  rainerImageTree2 = {
+    "img": cv.imread("image_sets/project_images/Rainier1.png"),
+    "children": [
+      { "img": cv.imread("image_sets/project_images/Rainier2.png") },
+      { "img": cv.imread("image_sets/project_images/Rainier3.png") }
+    ]
+  }
+  rainerImageTree3 = {
+    "img": cv.imread("image_sets/project_images/Rainier1.png"),
+    "children": [
+      { "img": cv.imread("image_sets/project_images/Rainier2.png") },
+      { "img": cv.imread("image_sets/project_images/Rainier3.png") },
+      { 
+        "img": cv.imread("image_sets/project_images/Rainier5.png"),
+        "children": [
+          { "img": cv.imread("image_sets/project_images/Rainier4.png") },
+          { "img": cv.imread("image_sets/project_images/Rainier6.png") }
+        ] 
+      }
+    ]
+  }
+  lookoutImageTree = {
+    "img": cv.imread("image_sets/lookout/2.jpg"),
+    "children": [
+      { "img": cv.imread("image_sets/lookout/1.jpg") },
+      {
+        "img": cv.imread("image_sets/lookout/3.jpg"),
+        "children": [ 
+          { "img": cv.imread("image_sets/lookout/4.jpg") } 
+        ]
+      }
+    ]
+  }
+  lookoutImageTreeHD = {
+    "img": cv.imread("image_sets/lookout/2_full.jpg"),
+    "children": [
+      { "img": cv.imread("image_sets/lookout/1_full.jpg") },
+      {
+        "img": cv.imread("image_sets/lookout/3_full.jpg"),
+        "children": [ 
+          { "img": cv.imread("image_sets/lookout/4_full.jpg") } 
+        ]
+      }
+    ]
+  }
 
   startTime = time.time()
-  print("-- Harris Keypoints --") 
-  print("-- Image 1 --")
-  img1Gradient = getNpGradient2(img1)
-  img1HarrisKeypoints = computeHarrisKeypoints(img1, img1Gradient)
-  print("-- Image 2 --")
-  img2Gradient = getNpGradient2(img2)
-  img2HarrisKeypoints = computeHarrisKeypoints(img2, img2Gradient)
-
-  print("-- SIFT Descriptors --")
-  print("-- Image 1 --")
-  img1DescriptedKeypoints = getKeypointDescriptors(img1, img1Gradient, img1HarrisKeypoints)
-  print("-- Image 2 --")
-  img2DescriptedKeypoints = getKeypointDescriptors(img2, img2Gradient, img2HarrisKeypoints)
-
-  print("-- Matching keypoints --")
-  sortedKeypointPairs = getSortedKeypointPairs(img1DescriptedKeypoints, img2DescriptedKeypoints)
-
-  print("-- SSD Matches --")
-  img1SSDKeypoints, img2SSDKeypoints = getBestMatchesByThreshold(sortedKeypointPairs)
-
-  print("-- Ratio Test Matches --")
-  img1RatioKeypoints, img2RatioKeypoints = getBestMatchesByRatioTest(img1DescriptedKeypoints, img2DescriptedKeypoints, sortedKeypointPairs)
- 
-  print(f"All done in {(time.time() - startTime) * 1000}ms")
-
-  cv.imshow("img1 SSD", annotateKeypoints(img1, img1SSDKeypoints))
-  cv.imshow("img2 SSD", annotateKeypoints(img2, img2SSDKeypoints))
-
-  cv.imshow("img1 ratio", annotateKeypoints(img1, img1RatioKeypoints))
-  cv.imshow("img2 ratio", annotateKeypoints(img2, img2RatioKeypoints))
-
-  cv.waitKey(0)
   
+  imageTree = hangingImageTree
+  computeImageTreeHomographies(imageTree)
+  # panorama = stitchImageTree(imageTree)
+
+  # for panorama 2x:
+  # computeImageTreeHomographies(panoImageTree)
+  # panoImageTree2X["h"] = None
+  # panoImageTree2X["children"][0]["h"] = panoImageTree["children"][0]["h"] * buildScaleFixer(panoImageTree2X["children"][0]["img"], panoImageTree["children"][0]["img"])
+  # panorama = stitchImageTree(panoImageTree2X, meanBlend = False)
+
+  # for HD lookout:
+  # computeImageTreeHomographies(lookoutImageTree)
+  # scaleFixer = buildScaleFixer(lookoutImageTreeHD["img"], lookoutImageTree["img"])
+  # lookoutImageTreeHD["h"] = None
+  # lookoutImageTreeHD["children"][0]["h"] = lookoutImageTree["children"][0]["h"] * scaleFixer
+  # lookoutImageTreeHD["children"][1]["h"] = lookoutImageTree["children"][1]["h"] * scaleFixer
+  # lookoutImageTreeHD["children"][1]["children"][0]["h"] = lookoutImageTree["children"][1]["children"][0]["h"] * scaleFixer
+  # panorama = stitchImageTree(lookoutImageTreeHD, meanBlend = True)
+
+  print(f"Done end to end in {(time.time() - startTime) * 1000}ms")
+
+  # cv.imwrite("debug.jpg", panorama)
+  cv.waitKey(0)
