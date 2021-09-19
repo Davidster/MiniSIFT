@@ -1,96 +1,145 @@
-use opencv as cv;
-use opencv::core::*;
-use opencv::imgcodecs::*;
-use opencv::prelude::*;
-use opencv::types::*;
+use image::DynamicImage;
+use image::GrayImage;
+use image::Luma;
+use image::RgbImage;
+use show_image::WindowProxy;
+use std::sync::mpsc::channel;
+use std::sync::mpsc::Receiver;
+use std::sync::Arc;
+use std::sync::Mutex;
+use std::thread;
+use std::time::Duration;
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let alpha: i32 = args[2].parse().unwrap();
-    let beta: i32 = args[1].parse().unwrap();
-    println!("alpha: {}, beta: {}", alpha, beta);
-    let mut building_img = cv::imgcodecs::imread(
-        "../featureMatcher/image_sets/panorama/pano1_0008.png",
-        IMREAD_UNCHANGED,
-    )
-    .unwrap();
-    cv::highgui::imshow("buildingImg", &building_img).unwrap();
-    // should be 3: r, g, b
-    let imgChannels = building_img.channels().unwrap();
-    let imgHeight = building_img.rows();
-    let imgWidth = building_img.cols();
-    let mut building_img_channels: VectorOfMat = (0..imgChannels)
-        .map(|n| {
-            Mat::new_rows_cols_with_default(imgHeight, imgWidth, CV_8UC1, Scalar::all(0.0)).unwrap()
-        })
-        .collect();
-    cv::core::split(&building_img, &mut building_img_channels).unwrap();
-    let mut building_img_gradient_x_channels: Vector<Mat> = (0..imgChannels)
-        .map(|n| {
-            Mat::new_rows_cols_with_default(imgHeight, imgWidth, CV_8UC1, Scalar::all(0.0)).unwrap()
-        })
-        .collect();
-    let mut building_img_gradient_y_channels: Vector<Mat> = (0..imgChannels)
-        .map(|n| {
-            Mat::new_rows_cols_with_default(imgHeight, imgWidth, CV_8UC1, Scalar::all(0.0)).unwrap()
-        })
-        .collect();
-    for (channel_index, channel_name) in (vec![
-        String::from("Blue"),
-        String::from("Green"),
-        String::from("Red"),
-    ])
-    .iter()
-    .enumerate()
-    {
-        let src = building_img_channels.get(channel_index).unwrap();
-        let mut grad_x_out = building_img_gradient_x_channels.get(channel_index).unwrap();
-        let mut grad_y_out = building_img_gradient_y_channels.get(channel_index).unwrap();
-        cv::imgproc::spatial_gradient(
-            &src,
-            &mut grad_x_out,
-            &mut grad_y_out,
-            3,
-            cv::core::BorderTypes::BORDER_REPLICATE as i32,
-        )
-        .unwrap();
-        let mut grad_x_out_norm =
-            Mat::new_rows_cols_with_default(imgHeight, imgWidth, CV_8UC1, Scalar::all(0.0))
-                .unwrap();
-        normalize(
-            &grad_x_out,
-            &mut grad_x_out_norm,
-            f64::from(alpha),
-            f64::from(beta),
-            NORM_MINMAX,
-            -1,
-            &no_array().unwrap(),
-        )
-        .unwrap();
-        cv::highgui::imshow(
-            format!("{} gradient x (norm)", channel_name).as_str(),
-            &grad_x_out_norm,
-        )
-        .unwrap();
-        cv::highgui::imshow(format!("{} gradient x", channel_name).as_str(), &grad_x_out).unwrap();
-        // cv::highgui::imshow(format!("{} gradient y", channel_name).as_str(), &grad_y_out).unwrap();
-    }
-    // let mut building_img_gradient_y = Mat::new_rows_cols_with_default(
-    //     imgHeight,
-    //     imgWidth,
-    //     building_img.typ().unwrap(),
-    //     Scalar::all(0.0),
-    // )
-    // .unwrap();
-
-    // cv::highgui::imshow("buildingImgGradientX", &building_img_gradient_x).unwrap();
-    // cv::highgui::imshow("buildingImgGradientY", &building_img_gradient_y).unwrap();
-    cv::highgui::wait_key(0).unwrap();
-    // opencv::imgcodecs::im
-    // println!("{:?}", boxesImg);
+struct SplitImage {
+    r: GrayImage,
+    g: GrayImage,
+    b: GrayImage,
 }
 
-// rainier1Img = cv.imread("image_sets/project_images/Rainier1.png")
-// rainier1Gradient = getNpGradient2(rainier1Img)
-// rainier1HarrisKeypoints = computeHarrisKeypoints(rainier1Img, rainier1Gradient)
-// cv.imwrite("results/1b.png", getDrawKeypointsImg(rainier1Img, rainier1HarrisKeypoints))
+struct ImageGradients {
+    x: GrayImage,
+    y: GrayImage,
+}
+
+fn show_rgb_image(img: RgbImage, name: &str) -> WindowProxy {
+    let window = show_image::create_window(name, Default::default()).unwrap();
+    window
+        .set_image(name, image::DynamicImage::ImageRgb8(img))
+        .unwrap();
+    window
+}
+
+fn show_grayscale_image(img: GrayImage, name: &str) -> WindowProxy {
+    let window = show_image::create_window(name, Default::default()).unwrap();
+    window
+        .set_image(name, image::DynamicImage::ImageLuma8(img))
+        .unwrap();
+    window
+}
+
+struct WindowStatus {
+    window: WindowProxy,
+    key_pressed: bool,
+}
+
+fn wait_for_windows_to_close(windows: Vec<WindowProxy>) {
+    let (tx, rx) = channel();
+    for window in &windows {
+        let _tx = tx.clone();
+        let event_receiver = window.event_channel().unwrap();
+        thread::spawn(move || loop {
+            let event = event_receiver.recv().unwrap();
+            if let show_image::event::WindowEvent::KeyboardInput(event) = event {
+                if !event.is_synthetic && event.input.state.is_pressed() {
+                    println!("Key pressed!");
+                    _tx.send(()).unwrap();
+                    break;
+                }
+            }
+        });
+    }
+    rx.recv().unwrap();
+}
+
+fn load_rgb_image_from_file(path: &str) -> RgbImage {
+    image::open(path).unwrap().as_rgb8().unwrap().to_owned()
+}
+
+fn split_img_channels(img: &RgbImage) -> SplitImage {
+    let mut r = GrayImage::new(img.width(), img.height());
+    let mut g = GrayImage::new(img.width(), img.height());
+    let mut b = GrayImage::new(img.width(), img.height());
+    for (x, y, color) in img.enumerate_pixels() {
+        r.put_pixel(x, y, Luma([color[0]]));
+        g.put_pixel(x, y, Luma([color[1]]));
+        b.put_pixel(x, y, Luma([color[2]]));
+    }
+    SplitImage { r, g, b }
+}
+
+fn get_image_gradients(img: &GrayImage) -> ImageGradients {
+    ImageGradients {
+        x: image::imageops::filter3x3(
+            img,
+            &[1f32, 0f32, -1f32, 2f32, 0f32 - 2f32, 1f32, 0f32, -1f32],
+        ),
+        y: image::imageops::filter3x3(
+            img,
+            &[1f32, 2f32, 1f32, 0f32, 0f32, 0f32, -1f32, -2f32, -1f32],
+        ),
+    }
+}
+
+#[show_image::main]
+fn main() {
+    let mut windows: Vec<WindowProxy> = Vec::new();
+
+    let building_img =
+        load_rgb_image_from_file("../featureMatcher/image_sets/panorama/pano1_0008.png");
+    let pixel = building_img.get_pixel(building_img.width() - 1, building_img.height() - 1);
+    println!("{}, {}, {}", pixel[0], pixel[1], pixel[2]);
+
+    let SplitImage {
+        g: building_img_g,
+        b: building_img_b,
+        ..
+    } = split_img_channels(&building_img);
+    let ImageGradients {
+        x: building_img_g_grad_x,
+        y: building_img_g_grad_y,
+    } = get_image_gradients(&building_img_g);
+
+    windows.push(show_rgb_image(building_img.clone(), "Building"));
+    windows.push(show_grayscale_image(
+        building_img_g.clone(),
+        "Building Green",
+    ));
+    windows.push(show_grayscale_image(
+        building_img_b.clone(),
+        "Building Blue",
+    ));
+    windows.push(show_grayscale_image(
+        building_img_g_grad_x.clone(),
+        "Building Green Grad X",
+    ));
+    windows.push(show_grayscale_image(
+        building_img_g_grad_y.clone(),
+        "Building Green Grad Y",
+    ));
+
+    wait_for_windows_to_close(windows);
+    // image::
+}
+
+// fn wait_for_some(receivers: Vec<std::sync::mpsc::Receiver<()>>) {
+//     let (joined_sender, joined_receiver) = std::sync::mpsc::channel();
+//     for receiver in receivers {
+//         let _tx = joined_sender.clone();
+//         thread::spawn(move || {
+//             receiver.recv().unwrap();
+//             _tx.send(()).unwrap();
+//         });
+//     }
+//     joined_receiver.recv().unwrap();
+//     println!("Something was sent on some channel");
+// }

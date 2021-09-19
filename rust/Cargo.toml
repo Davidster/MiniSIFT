@@ -4,4 +4,5 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
-opencv = "0.53.2"
+show-image = { version = "0.9.3", features = ["image"] }
+image = { version = "0.23.14" }
