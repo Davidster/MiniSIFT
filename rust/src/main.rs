@@ -3,6 +3,7 @@ use image::GrayImage;
 use image::Luma;
 use image::Rgb;
 use image::RgbImage;
+use show_image::WindowOptions;
 use show_image::WindowProxy;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Receiver;
@@ -29,22 +30,23 @@ struct ImageGradients {
     y: GrayImage,
 }
 
+fn show_image(img: DynamicImage, name: &str) -> WindowProxy {
+    let mut options = WindowOptions::new();
+    options = options.set_preserve_aspect_ratio(true);
+    // options.
+    let window = show_image::create_window(name, options).unwrap();
+    window.set_image(name, img).unwrap();
+    // show_image::back
+    window
+}
+
 fn show_rgb_image(img: RgbImage, name: &str) -> WindowProxy {
-    let window = show_image::create_window(name, Default::default()).unwrap();
-    window
-        .set_image(name, image::DynamicImage::ImageRgb8(img))
-        .unwrap();
-    window
+    show_image(image::DynamicImage::ImageRgb8(img), name)
 }
 
 fn show_grayscale_image(img: GrayImage, name: &str) -> WindowProxy {
-    let window = show_image::create_window(name, Default::default()).unwrap();
-    window
-        .set_image(name, image::DynamicImage::ImageLuma8(img))
-        .unwrap();
-    window
+    show_image(image::DynamicImage::ImageLuma8(img), name)
 }
-
 struct WindowStatus {
     window: WindowProxy,
     key_pressed: bool,
