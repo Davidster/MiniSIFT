@@ -5,6 +5,8 @@ use image::Rgb;
 use image::RgbImage;
 use show_image::WindowOptions;
 use show_image::WindowProxy;
+use std::cmp::max;
+use std::convert::TryFrom;
 use std::sync::mpsc::channel;
 use std::sync::mpsc::Receiver;
 use std::sync::Arc;
@@ -15,7 +17,7 @@ use std::time::Duration;
 struct KeyPoint {
     x: u32,
     y: u32,
-    radius: f32,
+    radius: f64,
     color: [u8; 3],
 }
 
@@ -100,10 +102,61 @@ fn get_image_gradients(img: &GrayImage) -> ImageGradients {
     }
 }
 
+fn get_blended_circle_pixel(
+    pixel_color: &[u8; 3],
+    pixel_x: i32,
+    pixel_y: i32,
+    circle_color: &[u8; 3],
+    circle_center_x: i32,
+    circle_center_y: i32,
+    circle_radius: f64,
+    stroke_size: f32,
+) -> Option<[u8; 3]> {
+    let dist_x = circle_center_x - pixel_x;
+    let dist_y = circle_center_y - pixel_y;
+    let dist = ((dist_x.pow(2) + dist_y.pow(2)) as f64).sqrt();
+    let alpha = 0f64.max(1f64 - ((dist - circle_radius).abs() / stroke_size as f64));
+    if alpha > 0f64 {
+        let blended_colors: Vec<u8> = circle_color
+            .iter()
+            .enumerate()
+            .map(|(i, channel)| {
+                let keypoint_portion = channel.clone() as f64 * alpha;
+                let img_portion = pixel_color[i] as f64 * (1f64 - alpha);
+                let final_channel = keypoint_portion + img_portion;
+                let final_channel_clamped = final_channel
+                    .max(u8::MIN as f64)
+                    .min(u8::MAX as f64)
+                    .round() as u8;
+                final_channel_clamped
+            })
+            .collect();
+        let blended_colors_arr = [blended_colors[0], blended_colors[1], blended_colors[2]];
+        return Some(blended_colors_arr);
+    }
+    None
+}
+
 fn draw_keypoints(img: &RgbImage, keypoints: &Vec<KeyPoint>) -> RgbImage {
     let mut result = RgbImage::new(img.width(), img.height());
     for (x, y, _) in img.enumerate_pixels() {
-        result.put_pixel(x, y, img.get_pixel(x, y).clone());
+        let img_color = img.get_pixel(x, y);
+        result.put_pixel(x, y, img_color.clone());
+
+        for keypoint in keypoints {
+            if let Some(blended_color) = get_blended_circle_pixel(
+                &[img_color[0], img_color[1], img_color[2]],
+                x as i32,
+                y as i32,
+                &keypoint.color,
+                keypoint.x as i32,
+                keypoint.y as i32,
+                keypoint.radius,
+                1f32,
+            ) {
+                result.put_pixel(x, y, Rgb::from(blended_color));
+            }
+        }
     }
     for keypoint in keypoints {
         result.put_pixel(keypoint.x, keypoint.y, Rgb::from(keypoint.color));
@@ -126,25 +179,25 @@ fn main() {
             KeyPoint {
                 x: 10,
                 y: 10,
-                radius: 0f32,
+                radius: 5f64,
                 color: [255, 0, 0],
             },
             KeyPoint {
                 x: 100,
                 y: 10,
-                radius: 0f32,
+                radius: 10f64,
                 color: [0, 255, 0],
             },
             KeyPoint {
                 x: 100,
                 y: 100,
-                radius: 0f32,
+                radius: 2f64,
                 color: [0, 0, 255],
             },
             KeyPoint {
                 x: 10,
                 y: 100,
-                radius: 0f32,
+                radius: 15f64,
                 color: [255, 0, 255],
             },
         ],
