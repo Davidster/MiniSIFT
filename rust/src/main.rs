@@ -1,24 +1,23 @@
+use image::imageops::filter3x3;
 use image::DynamicImage;
 use image::GrayImage;
 use image::Luma;
 use image::Rgb;
 use image::RgbImage;
+
 use show_image::WindowOptions;
 use show_image::WindowProxy;
-use std::cmp::max;
-use std::convert::TryFrom;
+
 use std::sync::mpsc::channel;
-use std::sync::mpsc::Receiver;
-use std::sync::Arc;
-use std::sync::Mutex;
 use std::thread;
-use std::time::Duration;
+
+use rand::Rng;
 
 struct KeyPoint {
     x: u32,
     y: u32,
-    radius: f64,
-    color: [u8; 3],
+    // radius: f64,
+    // color: [u8; 3],
 }
 
 struct SplitImage {
@@ -28,8 +27,14 @@ struct SplitImage {
 }
 
 struct ImageGradients {
-    x: GrayImage,
-    y: GrayImage,
+    x: RgbImage,
+    y: RgbImage,
+}
+
+struct ImageTreeNode {
+    image: RgbImage,
+    key_points: Option<Vec<KeyPoint>>,
+    children: Option<Vec<ImageTreeNode>>,
 }
 
 fn show_image(img: DynamicImage, name: &str) -> WindowProxy {
@@ -74,7 +79,7 @@ fn wait_for_windows_to_close(windows: Vec<WindowProxy>) {
 }
 
 fn load_rgb_image_from_file(path: &str) -> RgbImage {
-    image::open(path).unwrap().as_rgb8().unwrap().to_owned()
+    image::open(path).unwrap().into_rgb8()
 }
 
 fn split_img_channels(img: &RgbImage) -> SplitImage {
@@ -89,16 +94,37 @@ fn split_img_channels(img: &RgbImage) -> SplitImage {
     SplitImage { r, g, b }
 }
 
-fn get_image_gradients(img: &GrayImage) -> ImageGradients {
+fn merge_img_channels(img: &SplitImage) -> RgbImage {
+    let mut result = RgbImage::new(img.r.width(), img.r.height());
+    for (x, y, r_component) in img.r.enumerate_pixels() {
+        result.put_pixel(
+            x,
+            y,
+            Rgb::from([
+                r_component[0],
+                img.g.get_pixel(x, y)[0],
+                img.b.get_pixel(x, y)[0],
+            ]),
+        )
+    }
+    result
+}
+
+fn get_image_gradients(img: &RgbImage) -> ImageGradients {
+    let sobel_x = [1f32, 0f32, -1f32, 2f32, 0f32 - 2f32, 1f32, 0f32, -1f32];
+    let sobel_y = [1f32, 2f32, 1f32, 0f32, 0f32, 0f32, -1f32, -2f32, -1f32];
+    let SplitImage { r, g, b } = split_img_channels(img);
     ImageGradients {
-        x: image::imageops::filter3x3(
-            img,
-            &[1f32, 0f32, -1f32, 2f32, 0f32 - 2f32, 1f32, 0f32, -1f32],
-        ),
-        y: image::imageops::filter3x3(
-            img,
-            &[1f32, 2f32, 1f32, 0f32, 0f32, 0f32, -1f32, -2f32, -1f32],
-        ),
+        x: merge_img_channels(&SplitImage {
+            r: filter3x3(&r, &sobel_x),
+            g: filter3x3(&g, &sobel_x),
+            b: filter3x3(&b, &sobel_x),
+        }),
+        y: merge_img_channels(&SplitImage {
+            r: filter3x3(&r, &sobel_y),
+            g: filter3x3(&g, &sobel_y),
+            b: filter3x3(&b, &sobel_y),
+        }),
     }
 }
 
@@ -120,10 +146,11 @@ fn get_blended_circle_pixel(
         let blended_colors: Vec<u8> = circle_color
             .iter()
             .enumerate()
+            // interpolate from img_portion to keypoint_portion by alpha
             .map(|(i, channel)| {
-                let keypoint_portion = channel.clone() as f64 * alpha;
+                let circle_portion = channel.clone() as f64 * alpha;
                 let img_portion = pixel_color[i] as f64 * (1f64 - alpha);
-                let final_channel = keypoint_portion + img_portion;
+                let final_channel = circle_portion + img_portion;
                 let final_channel_clamped = final_channel
                     .max(u8::MIN as f64)
                     .min(u8::MAX as f64)
@@ -137,32 +164,37 @@ fn get_blended_circle_pixel(
     None
 }
 
-fn draw_keypoints(img: &RgbImage, keypoints: &Vec<KeyPoint>) -> RgbImage {
+fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
     let mut result = RgbImage::new(img.width(), img.height());
+    let key_point_colors: Vec<[u8; 3]> = (0..key_points.len())
+        .map(|_| [rand::random(), rand::random(), rand::random()])
+        .collect();
     for (x, y, _) in img.enumerate_pixels() {
         let img_color = img.get_pixel(x, y);
         result.put_pixel(x, y, img_color.clone());
 
-        for keypoint in keypoints {
+        for (i, key_point) in key_points.iter().enumerate() {
             if let Some(blended_color) = get_blended_circle_pixel(
                 &[img_color[0], img_color[1], img_color[2]],
                 x as i32,
                 y as i32,
-                &keypoint.color,
-                keypoint.x as i32,
-                keypoint.y as i32,
-                keypoint.radius,
+                &key_point_colors[i],
+                key_point.x as i32,
+                key_point.y as i32,
+                2f64,
                 1f32,
             ) {
                 result.put_pixel(x, y, Rgb::from(blended_color));
             }
         }
     }
-    for keypoint in keypoints {
-        result.put_pixel(keypoint.x, keypoint.y, Rgb::from(keypoint.color));
+    for (i, key_point) in key_points.iter().enumerate() {
+        result.put_pixel(key_point.x, key_point.y, Rgb::from(key_point_colors[i]));
     }
     result
 }
+
+fn do_sift(image_tree: &ImageTreeNode) {}
 
 #[show_image::main]
 fn main() {
@@ -173,67 +205,71 @@ fn main() {
     let pixel = building_img.get_pixel(building_img.width() - 1, building_img.height() - 1);
     println!("{}, {}, {}", pixel[0], pixel[1], pixel[2]);
 
-    let building_img_w_keypoints = draw_keypoints(
-        &building_img,
-        &vec![
-            KeyPoint {
-                x: 10,
-                y: 10,
-                radius: 5f64,
-                color: [255, 0, 0],
-            },
-            KeyPoint {
-                x: 100,
-                y: 10,
-                radius: 10f64,
-                color: [0, 255, 0],
-            },
-            KeyPoint {
-                x: 100,
-                y: 100,
-                radius: 2f64,
-                color: [0, 0, 255],
-            },
-            KeyPoint {
-                x: 10,
-                y: 100,
-                radius: 15f64,
-                color: [255, 0, 255],
-            },
-        ],
-    );
+    // let image_file_result = image::open("../featureMatcher/image_sets/project_images/Rainier1.png");
+    // let image_file = image_file_result.unwrap();
+    // image_file.into_rgb8();
+    // println!(
+    //     "{:?}, {:?}, {:?}, {:?}, {:?}, {:?}, {:?}",
+    //     image_file.as_rgb8(),
+    //     image_file.as_rgb16(),
+    //     image_file.as_rgba8(),
+    //     image_file.as_rgba16(),
+    //     image_file.as_luma8(),
+    //     image_file.as_luma16(),
+    //     image_file.as_bgr8(),
+    // );
 
-    let SplitImage {
-        g: building_img_g,
-        b: building_img_b,
-        ..
-    } = split_img_channels(&building_img);
-    let ImageGradients {
-        x: building_img_g_grad_x,
-        y: building_img_g_grad_y,
-    } = get_image_gradients(&building_img_g);
+    let rainier_image_tree = ImageTreeNode {
+        image: load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier1.png"),
+        children: Some(vec![ImageTreeNode {
+            image: load_rgb_image_from_file("../featureMatcher/image_sets/panorama/pano1_0008.png"),
+            children: None,
+            key_points: None,
+        }]),
+        key_points: None,
+    };
 
-    windows.push(show_rgb_image(building_img.clone(), "Building"));
-    windows.push(show_rgb_image(
-        building_img_w_keypoints.clone(),
-        "Building w keypoints",
-    ));
-    windows.push(show_grayscale_image(
-        building_img_g.clone(),
-        "Building Green",
-    ));
-    windows.push(show_grayscale_image(
-        building_img_b.clone(),
-        "Building Blue",
-    ));
-    windows.push(show_grayscale_image(
-        building_img_g_grad_x.clone(),
-        "Building Green Grad X",
-    ));
-    windows.push(show_grayscale_image(
-        building_img_g_grad_y.clone(),
-        "Building Green Grad Y",
-    ));
+    let rainier_grad = get_image_gradients(&rainier_image_tree.image);
+
+    // let building_img_w_key_points = draw_key_points(
+    //     &building_img,
+    //     &vec![
+    //         KeyPoint {
+    //             x: 10,
+    //             y: 10,
+    //         },
+    //         KeyPoint {
+    //             x: 100,
+    //             y: 10,
+    //         },
+    //         KeyPoint {
+    //             x: 100,
+    //             y: 100,
+    //         },
+    //         KeyPoint {
+    //             x: 10,
+    //             y: 100,
+    //         },
+    //     ],
+    // );
+
+    // let SplitImage {
+    //     g: building_img_g,
+    //     b: building_img_b,
+    //     ..
+    // } = split_img_channels(&building_img);
+    // let ImageGradients {
+    //     x: building_img_g_grad_x,
+    //     y: building_img_g_grad_y,
+    // } = get_image_gradients(&building_img_g);
+
+    println!("Opening windows");
+
+    windows.push(show_rgb_image(rainier_image_tree.image.clone(), "Rainier"));
+    windows.push(show_rgb_image(rainier_grad.x.clone(), "Rainier grad x"));
+    windows.push(show_rgb_image(rainier_grad.y.clone(), "Rainier grad y"));
+
+    println!("Windows opened");
 
     wait_for_windows_to_close(windows);
     // image::
