@@ -112,7 +112,7 @@ fn merge_img_channels(img: &SplitImage) -> RgbImage {
 
 fn get_image_gradients(img: &RgbImage) -> ImageGradients {
     let sobel_x = [1f32, 0f32, -1f32, 2f32, 0f32 - 2f32, 1f32, 0f32, -1f32];
-    let sobel_y = [1f32, 2f32, 1f32, 0f32, 0f32, 0f32, -1f32, -2f32, -1f32];
+    let sobel_y = [0f32, 0f32, 0f32, 0f32, 0.1f32, 0f32, 0f32, 0f32, 0f32];
     let SplitImage { r, g, b } = split_img_channels(img);
     ImageGradients {
         x: merge_img_channels(&SplitImage {
@@ -194,7 +194,7 @@ fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
     result
 }
 
-fn do_sift(image_tree: &ImageTreeNode) {}
+fn do_sift(image_tree: &mut ImageTreeNode) {}
 
 #[show_image::main]
 fn main() {
