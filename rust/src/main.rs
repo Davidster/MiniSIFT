@@ -194,7 +194,18 @@ fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
     result
 }
 
-fn do_sift(image_tree: &mut ImageTreeNode) {}
+fn do_sift(image_tree_node: &mut ImageTreeNode) {
+    if image_tree_node.key_points.is_none() {
+        println!("-- Harris keypoints --");
+        let img_gradient = get_image_gradients(&image_tree_node.image);
+        // imgHarrisKeypoints = computeHarrisKeypoints(imgNode["img"], imgGradient)
+        // print("-- SIFT Descriptors --")
+        // imgKeypoints = getKeypointDescriptors(imgNode["img"], imgGradient, imgHarrisKeypoints)
+        // imgNode["keypoints"] = imgKeypoints
+    } else {
+        println!("Keypoints already computed. Skipping this step");
+    }
+}
 
 #[show_image::main]
 fn main() {
