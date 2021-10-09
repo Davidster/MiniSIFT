@@ -1,9 +1,19 @@
+#![recursion_limit = "256"]
+
 use image::imageops::filter3x3;
 use image::DynamicImage;
 use image::GrayImage;
 use image::Luma;
 use image::Rgb;
 use image::RgbImage;
+
+use ndarray::concatenate;
+use ndarray::s;
+use ndarray::Array2;
+use ndarray::Array3;
+use ndarray::ArrayView3;
+use ndarray::Axis;
+use ndarray::Zip;
 
 use show_image::WindowOptions;
 use show_image::WindowProxy;
@@ -13,6 +23,9 @@ use std::thread;
 
 use rand::Rng;
 
+type NDRgbImage = Array3<f32>;
+type NDGrayImage = Array3<f32>;
+
 struct KeyPoint {
     x: u32,
     y: u32,
@@ -21,18 +34,18 @@ struct KeyPoint {
 }
 
 struct SplitImage {
-    r: GrayImage,
-    g: GrayImage,
-    b: GrayImage,
+    r: NDGrayImage,
+    g: NDGrayImage,
+    b: NDGrayImage,
 }
 
 struct ImageGradients {
-    x: RgbImage,
-    y: RgbImage,
+    x: NDRgbImage,
+    y: NDRgbImage,
 }
 
 struct ImageTreeNode {
-    image: RgbImage,
+    image: NDRgbImage,
     key_points: Option<Vec<KeyPoint>>,
     children: Option<Vec<ImageTreeNode>>,
 }
@@ -82,37 +95,33 @@ fn load_rgb_image_from_file(path: &str) -> RgbImage {
     image::open(path).unwrap().into_rgb8()
 }
 
-fn split_img_channels(img: &RgbImage) -> SplitImage {
-    let mut r = GrayImage::new(img.width(), img.height());
-    let mut g = GrayImage::new(img.width(), img.height());
-    let mut b = GrayImage::new(img.width(), img.height());
-    for (x, y, color) in img.enumerate_pixels() {
-        r.put_pixel(x, y, Luma([color[0]]));
-        g.put_pixel(x, y, Luma([color[1]]));
-        b.put_pixel(x, y, Luma([color[2]]));
-    }
+fn split_img_channels(img: &NDRgbImage) -> SplitImage {
+    let r = img.slice_move(s![.., .., 0..1]);
+    let g = img.slice_move(s![.., .., 1..2]);
+    let b = img.slice_move(s![.., .., 2..3]);
     SplitImage { r, g, b }
 }
 
-fn merge_img_channels(img: &SplitImage) -> RgbImage {
-    let mut result = RgbImage::new(img.r.width(), img.r.height());
-    for (x, y, r_component) in img.r.enumerate_pixels() {
-        result.put_pixel(
-            x,
-            y,
-            Rgb::from([
-                r_component[0],
-                img.g.get_pixel(x, y)[0],
-                img.b.get_pixel(x, y)[0],
-            ]),
-        )
-    }
-    result
+fn merge_img_channels(img: &SplitImage) -> NDRgbImage {
+    concatenate(Axis(2), &[img.r.view(), img.g.view(), img.b.view()]).unwrap()
 }
 
-fn get_image_gradients(img: &RgbImage) -> ImageGradients {
+fn filter_2d(img: &NDRgbImage, kernel: &Array2<f32>) {
+    let img_shape = img.shape();
+    let kernel_shape = kernel.shape();
+    let half_kernel_width = ((kernel_shape[0] as f32) / 2.).floor() as i32;
+    let half_kernel_height = ((kernel_shape[1] as f32) / 2.).floor() as i32;
+    let relative_kernel_positions: Array2<i32> =
+        Array2<f32>::from(kernel.indexed_iter().map(|((i, j), _)| 0).collect());
+    for x in 0..img_shape[0] {
+        for y in 0..img_shape[1] {}
+    }
+}
+
+fn get_image_gradients(img: &NDRgbImage) -> ImageGradients {
     let sobel_x = [1f32, 0f32, -1f32, 2f32, 0f32 - 2f32, 1f32, 0f32, -1f32];
-    let sobel_y = [0f32, 0f32, 0f32, 0f32, 0.1f32, 0f32, 0f32, 0f32, 0f32];
+    let sobel_y = [1f32, 2f32, 1f32, 0f32, 0f32, 0f32, -1f32, -2f32, -1f32];
+
     let SplitImage { r, g, b } = split_img_channels(img);
     ImageGradients {
         x: merge_img_channels(&SplitImage {
@@ -193,6 +202,14 @@ fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
     }
     result
 }
+
+// fn compute_harris_response(image: &RgbImage, image_gradients: &ImageGradients) {
+
+// }
+
+// fn compute_harris_keypoints(image: &RgbImage, image_gradients: &ImageGradients) {
+
+// }
 
 fn do_sift(image_tree_node: &mut ImageTreeNode) {
     if image_tree_node.key_points.is_none() {
@@ -276,6 +293,7 @@ fn main() {
 
     println!("Opening windows");
 
+    // windows.push(show_rgb_image(building_img.clone(), "Building"));
     windows.push(show_rgb_image(rainier_image_tree.image.clone(), "Rainier"));
     windows.push(show_rgb_image(rainier_grad.x.clone(), "Rainier grad x"));
     windows.push(show_rgb_image(rainier_grad.y.clone(), "Rainier grad y"));
