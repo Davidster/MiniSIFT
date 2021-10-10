@@ -334,18 +334,18 @@ fn multiply_per_pixel(img1: &NDGrayImage, img2: &NDGrayImage) -> NDGrayImage {
     let mut out = Array3::zeros((img_shape[0], img_shape[1], 1));
     for x in 0..img_shape[0] {
         for y in 0..img_shape[1] {
-            out[[x, y, 0]] = img1[[x, y, 0]] * img2[[x, y, 1]]
+            out[[x, y, 0]] = img1[[x, y, 0]] * img2[[x, y, 1]];
         }
     }
     out
 }
 
-fn compute_harris_response(image: &NDRgbImage, image_gradients: &ImageGradientsGray) {
+fn compute_harris_response(img: &NDRgbImage, img_gradients: &ImageGradientsGray) -> NDGrayImage {
     let mut harris_matrices = [
-        multiply_per_pixel(&image_gradients.x, &image_gradients.x),
-        multiply_per_pixel(&image_gradients.x, &image_gradients.y),
-        multiply_per_pixel(&image_gradients.y, &image_gradients.x),
-        multiply_per_pixel(&image_gradients.y, &image_gradients.y),
+        multiply_per_pixel(&img_gradients.x, &img_gradients.x),
+        multiply_per_pixel(&img_gradients.x, &img_gradients.y),
+        multiply_per_pixel(&img_gradients.y, &img_gradients.x),
+        multiply_per_pixel(&img_gradients.y, &img_gradients.y),
     ];
     let gaussian_blur_kernel = Array2::from_shape_vec(
         (3, 3),
@@ -365,12 +365,85 @@ fn compute_harris_response(image: &NDRgbImage, image_gradients: &ImageGradientsG
     for i in 0..harris_matrices.len() {
         harris_matrices[i] = filter_2d(&harris_matrices[i], &gaussian_blur_kernel);
     }
-    // compute corner strengths
+    let img_shape = img.shape();
+    let mut corner_strengths = Array3::zeros((img_shape[0], img_shape[1], 1));
+    for x in 0..img_shape[0] {
+        for y in 0..img_shape[1] {
+            let a = harris_matrices[0][[x, y, 0]];
+            let b = harris_matrices[1][[x, y, 0]];
+            let c = harris_matrices[2][[x, y, 0]];
+            let d = harris_matrices[3][[x, y, 0]];
+            corner_strengths[[x, y, 0]] = (a * d - b * c) / ((a + d) + 0.00001);
+        }
+    }
+    corner_strengths
 }
 
-// fn compute_harris_keypoints(image: &NDRgbImage, image_gradients: &ImageGradients) {
+fn is_max_among_neighbors(img: &NDRgbImage, x: i64, y: i64) -> bool {
+    let val = img[[x as usize, y as usize, 0]];
+    if val == 0f32 {
+        return false;
+    }
+    let img_shape = img.shape();
+    let neighbor_positions: [(i64, i64); 9] = [
+        (-1, -1),
+        (-1, 0),
+        (-1, 1),
+        (0, -1),
+        (0, 0),
+        (0, 1),
+        (1, -1),
+        (1, 0),
+        (1, 1),
+    ];
+    let mut max_among_neighbors = 0f32;
+    for (relative_x, relative_y) in neighbor_positions {
+        let neighbor_x = (x + relative_x).max(0).min(img_shape[0] as i64 - 1);
+        let neighbor_y = (y + relative_y).max(0).min(img_shape[1] as i64 - 1);
+        let neighbor_val = img[[neighbor_x as usize, neighbor_y as usize, 0]];
+        if neighbor_val > max_among_neighbors {
+            max_among_neighbors = neighbor_val;
+        }
+    }
+    val >= max_among_neighbors
+}
 
-// }
+fn compute_harris_keypoints(img: &NDRgbImage, img_gradients: &ImageGradientsGray) {
+    let corner_strengths = compute_harris_response(img, img_gradients);
+    let mut max_corner_strength = 0f32;
+    let img_shape = img.shape();
+    for x in 0..img_shape[0] {
+        for y in 0..img_shape[1] {
+            let corner_strength = corner_strengths[[x, y, 0]];
+            if corner_strength > max_corner_strength {
+                max_corner_strength = corner_strength;
+            }
+        }
+    }
+    let mut corner_strengths_thresholded = Array3::zeros((img_shape[0], img_shape[1], 1));
+    for x in 0..img_shape[0] {
+        for y in 0..img_shape[1] {
+            let corner_strength = corner_strengths[[x, y, 0]];
+            if corner_strength > max_corner_strength * 0.2f32 {
+                corner_strengths_thresholded[[x, y, 0]] = corner_strengths[[x, y, 0]];
+            } else {
+                corner_strengths_thresholded[[x, y, 0]] = 0f32;
+            }
+        }
+    }
+    // TODO: convert into keypoints array instead
+    let mut corner_strengths_non_max_suppressed = Array3::zeros((img_shape[0], img_shape[1], 1));
+    for x in 0..img_shape[0] {
+        for y in 0..img_shape[1] {
+            if is_max_among_neighbors(&corner_strengths_thresholded, x, y) {
+                corner_strengths_non_max_suppressed[[x, y, 0]] =
+                    corner_strengths_thresholded[[x, y, 0]];
+            } else {
+                corner_strengths_non_max_suppressed[[x, y, 0]] = 0f32;
+            }
+        }
+    }
+}
 
 fn do_sift(image_tree_node: &mut ImageTreeNode) {
     if image_tree_node.key_points.is_none() {
