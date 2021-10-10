@@ -1,4 +1,6 @@
-#![recursion_limit = "256"]
+use std::cmp::Ordering;
+use std::sync::mpsc::channel;
+use std::thread;
 
 use image::imageops::filter3x3;
 use image::DynamicImage;
@@ -20,17 +22,20 @@ use ndarray::Zip;
 use show_image::WindowOptions;
 use show_image::WindowProxy;
 
-use std::sync::mpsc::channel;
-use std::thread;
-
 use rand::Rng;
 
 type NDRgbImage = Array3<f32>;
 type NDGrayImage = Array3<f32>;
 
+const SIFT_WINDOW_SIZE: i64 = 8;
+const SIFT_SUB_WINDOWSIZE: i64 = 4;
+const MAX_KEYPOINTS_PER_IMAGE: usize = 750;
+
+#[derive(Clone, Copy)]
 struct KeyPoint {
-    x: u32,
-    y: u32,
+    x: i64,
+    y: i64,
+    value: f32,
     // radius: f64,
     // color: [u8; 3],
 }
@@ -170,7 +175,7 @@ enum ImgConversionType {
     NORMALIZE,
 }
 
-fn ndarray_to_image_grey(img: NDGrayImage, conversion_type: ImgConversionType) -> GrayImage {
+fn ndarray_to_image_gray(img: NDGrayImage, conversion_type: ImgConversionType) -> GrayImage {
     let img_shape = img.shape();
     let mut out = GrayImage::new(img_shape[0] as u32, img_shape[1] as u32);
     let mut max_val = 0f32;
@@ -316,15 +321,19 @@ fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
                 &key_point_colors[i],
                 key_point.x as i64,
                 key_point.y as i64,
-                2f64,
-                1f32,
+                10f64,
+                2f32,
             ) {
                 result.put_pixel(x, y, Rgb::from(blended_color));
             }
         }
     }
     for (i, key_point) in key_points.iter().enumerate() {
-        result.put_pixel(key_point.x, key_point.y, Rgb::from(key_point_colors[i]));
+        result.put_pixel(
+            key_point.x as u32,
+            key_point.y as u32,
+            Rgb::from(key_point_colors[i]),
+        );
     }
     result
 }
@@ -334,7 +343,7 @@ fn multiply_per_pixel(img1: &NDGrayImage, img2: &NDGrayImage) -> NDGrayImage {
     let mut out = Array3::zeros((img_shape[0], img_shape[1], 1));
     for x in 0..img_shape[0] {
         for y in 0..img_shape[1] {
-            out[[x, y, 0]] = img1[[x, y, 0]] * img2[[x, y, 1]];
+            out[[x, y, 0]] = img1[[x, y, 0]] * img2[[x, y, 0]];
         }
     }
     out
@@ -408,7 +417,14 @@ fn is_max_among_neighbors(img: &NDRgbImage, x: i64, y: i64) -> bool {
     val >= max_among_neighbors
 }
 
-fn compute_harris_keypoints(img: &NDRgbImage, img_gradients: &ImageGradientsGray) {
+fn point_near_boundary(x: i64, y: i64, img_width: i64, img_height: i64) -> bool {
+    x < SIFT_WINDOW_SIZE
+        || y < SIFT_WINDOW_SIZE
+        || x > img_width - SIFT_WINDOW_SIZE
+        || y > img_height - SIFT_WINDOW_SIZE
+}
+
+fn compute_harris_keypoints(img: &NDRgbImage, img_gradients: &ImageGradientsGray) -> Vec<KeyPoint> {
     let corner_strengths = compute_harris_response(img, img_gradients);
     let mut max_corner_strength = 0f32;
     let img_shape = img.shape();
@@ -431,24 +447,46 @@ fn compute_harris_keypoints(img: &NDRgbImage, img_gradients: &ImageGradientsGray
             }
         }
     }
-    // TODO: convert into keypoints array instead
-    let mut corner_strengths_non_max_suppressed = Array3::zeros((img_shape[0], img_shape[1], 1));
+    let mut key_points: Vec<KeyPoint> = Vec::new();
     for x in 0..img_shape[0] {
         for y in 0..img_shape[1] {
-            if is_max_among_neighbors(&corner_strengths_thresholded, x, y) {
-                corner_strengths_non_max_suppressed[[x, y, 0]] =
-                    corner_strengths_thresholded[[x, y, 0]];
-            } else {
-                corner_strengths_non_max_suppressed[[x, y, 0]] = 0f32;
+            let value = corner_strengths_thresholded[[x, y, 0]];
+            if is_max_among_neighbors(&corner_strengths_thresholded, x as i64, y as i64)
+                && value > 0f32
+                && !point_near_boundary(
+                    x as i64,
+                    y as i64,
+                    img_shape[0] as i64,
+                    img_shape[1] as i64,
+                )
+            {
+                key_points.push(KeyPoint {
+                    x: x as i64,
+                    y: y as i64,
+                    value,
+                });
             }
         }
     }
+    key_points.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(Ordering::Equal));
+    // let key_points_sliced_2: Vec<KeyPoint> = key_points
+    //     .iter()
+    //     .enumerate()
+    //     .filter(|(i, _)| i < &MAX_KEYPOINTS_PER_IMAGE)
+    //     .map(|(_, val)| val)
+    //     .collect();
+    let max_keypoint = MAX_KEYPOINTS_PER_IMAGE.min(key_points.len() - 1);
+    let key_points_sliced = (&key_points[..max_keypoint]).to_vec();
+    println!("Found {:?} keypoints", key_points_sliced.len());
+    key_points_sliced
 }
 
 fn do_sift(image_tree_node: &mut ImageTreeNode) {
     if image_tree_node.key_points.is_none() {
         println!("-- Harris keypoints --");
         let img_gradient = get_image_gradients(&image_tree_node.image);
+        let img_harris_keypoints = compute_harris_keypoints(&image_tree_node.image, &img_gradient);
+        println!("-- SIFT Descriptors --");
         // imgHarrisKeypoints = computeHarrisKeypoints(imgNode["img"], imgGradient)
         // print("-- SIFT Descriptors --")
         // imgKeypoints = getKeypointDescriptors(imgNode["img"], imgGradient, imgHarrisKeypoints)
@@ -528,6 +566,7 @@ fn main() {
     //     y: building_img_g_grad_y,
     // } = get_image_gradients(&building_img_g);
 
+    println!("0.1");
     let rainier_image =
         load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier1.png");
     let rainier_image_nd = image_to_ndarray_rgb(rainier_image.clone());
@@ -536,13 +575,19 @@ fn main() {
         x: rainier_grad_x,
         y: rainier_grad_y,
     } = get_image_gradients(&rainier_image_nd);
-    let rainier_grad_x_r = split_img_channels(&rainier_grad_x).r;
-    let rainier_grad_x_r_img_norm =
-        ndarray_to_image_grey(rainier_grad_x_r.clone(), ImgConversionType::NORMALIZE);
-    let rainier_grad_x_r_img_clamp =
-        ndarray_to_image_grey(rainier_grad_x_r.clone(), ImgConversionType::CLAMP);
-    let rainier_grad_x_img = ndarray_to_image_rgb(rainier_grad_x.clone());
-    let rainier_grad_y_img = ndarray_to_image_rgb(rainier_grad_y.clone());
+    println!("0.5");
+    let rainier_grad_x_img =
+        ndarray_to_image_gray(rainier_grad_x.clone(), ImgConversionType::NORMALIZE);
+    println!("0.6");
+    let rainier_grad_y_img =
+        ndarray_to_image_gray(rainier_grad_y.clone(), ImgConversionType::NORMALIZE);
+
+    println!("1");
+    let img_gradient = get_image_gradients(&rainier_image_nd);
+    println!("2");
+    let img_harris_keypoints = compute_harris_keypoints(&rainier_image_nd, &img_gradient);
+    println!("3");
+    let rainier_annotated = draw_key_points(&rainier_image, &img_harris_keypoints);
 
     println!("Opening windows");
     windows.push(show_rgb_image(rainier_image.clone(), "rainier_image"));
@@ -550,21 +595,17 @@ fn main() {
         rainier_image_conv.clone(),
         "rainier_image_conv",
     ));
-    windows.push(show_rgb_image(
+    windows.push(show_grayscale_image(
         rainier_grad_x_img.clone(),
         "rainier_grad_x_img",
     ));
-    windows.push(show_rgb_image(
+    windows.push(show_grayscale_image(
         rainier_grad_y_img.clone(),
         "rainier_grad_y_img",
     ));
-    windows.push(show_grayscale_image(
-        rainier_grad_x_r_img_norm.clone(),
-        "rainier_grad_x_r_img_norm",
-    ));
-    windows.push(show_grayscale_image(
-        rainier_grad_x_r_img_clamp.clone(),
-        "rainier_grad_x_r_img_clamp",
+    windows.push(show_rgb_image(
+        rainier_annotated.clone(),
+        "rainier_annotated",
     ));
 
     println!("Windows opened");
