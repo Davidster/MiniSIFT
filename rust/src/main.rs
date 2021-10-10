@@ -30,14 +30,47 @@ type NDGrayImage = Array3<f32>;
 const SIFT_WINDOW_SIZE: i64 = 8;
 const SIFT_SUB_WINDOWSIZE: i64 = 4;
 const MAX_KEYPOINTS_PER_IMAGE: usize = 750;
+const KP_ORIENTATION_WINDOWSIZE: i64 = 5;
+
+// TODO: use f64 instead of f32?
+
+// cv.getGaussianKernel(9, 1.6)
+const GAUSSIAN_BASIC: [f32; 9] = [
+    0.011002f32,
+    0.04317515f32,
+    0.11464352f32,
+    0.2059771f32,
+    0.25040447f32,
+    0.2059771f32,
+    0.11464352f32,
+    0.04317515f32,
+    0.011002f32,
+];
+
+const GAUSSIAN_: [f32; 9] = [
+    1f32 / 16f32,
+    1f32 / 8f32,
+    1f32 / 16f32,
+    1f32 / 8f32,
+    1f32 / 4f32,
+    1f32 / 8f32,
+    1f32 / 16f32,
+    1f32 / 8f32,
+    1f32 / 16f32,
+];
 
 #[derive(Clone, Copy)]
 struct KeyPoint {
     x: i64,
     y: i64,
     value: f32,
-    // radius: f64,
-    // color: [u8; 3],
+}
+struct DescriptedKeyPoint {
+    x: i64,
+    y: i64,
+    value: f32,
+    orientation: f32,
+    descriptor: f32,
 }
 
 struct SplitImage {
@@ -60,6 +93,32 @@ struct ImageTreeNode {
     image: NDRgbImage,
     key_points: Option<Vec<KeyPoint>>,
     children: Option<Vec<ImageTreeNode>>,
+}
+
+fn gaussian(x: f32, mu: f32, sigma: f32) -> f32 {
+    let a = (x - mu) / sigma;
+    (-0.5 * a * a).exp()
+}
+
+fn gaussian_kernel_2d(radius: u16, sigma_in: Option<f32>) -> Vec<f32> {
+    let sigma = sigma_in.unwrap_or(radius as f32 / 2.);
+    let size = 2 * radius as usize + 1;
+    let mut kernel = Array2::zeros((size, size));
+    let mut sum = 0f32;
+    for x in 0..size {
+        for y in 0..size {
+            let val =
+                gaussian(x as f32, radius as f32, sigma) * gaussian(y as f32, radius as f32, sigma);
+            kernel[[x, y]] = val;
+            sum += val;
+        }
+    }
+    for x in 0..size {
+        for y in 0..size {
+            kernel[[x, y]] /= sum;
+        }
+    }
+    kernel // TODO: convert from array2 to vec
 }
 
 fn show_image(img: DynamicImage, name: &str) -> WindowProxy {
@@ -321,8 +380,8 @@ fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
                 &key_point_colors[i],
                 key_point.x as i64,
                 key_point.y as i64,
-                10f64,
-                2f32,
+                12f64,
+                1f32,
             ) {
                 result.put_pixel(x, y, Rgb::from(blended_color));
             }
@@ -469,17 +528,13 @@ fn compute_harris_keypoints(img: &NDRgbImage, img_gradients: &ImageGradientsGray
         }
     }
     key_points.sort_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(Ordering::Equal));
-    // let key_points_sliced_2: Vec<KeyPoint> = key_points
-    //     .iter()
-    //     .enumerate()
-    //     .filter(|(i, _)| i < &MAX_KEYPOINTS_PER_IMAGE)
-    //     .map(|(_, val)| val)
-    //     .collect();
     let max_keypoint = MAX_KEYPOINTS_PER_IMAGE.min(key_points.len() - 1);
     let key_points_sliced = (&key_points[..max_keypoint]).to_vec();
     println!("Found {:?} keypoints", key_points_sliced.len());
     key_points_sliced
 }
+
+fn get_keypoint_descriptors() {}
 
 fn do_sift(image_tree_node: &mut ImageTreeNode) {
     if image_tree_node.key_points.is_none() {
@@ -487,8 +542,6 @@ fn do_sift(image_tree_node: &mut ImageTreeNode) {
         let img_gradient = get_image_gradients(&image_tree_node.image);
         let img_harris_keypoints = compute_harris_keypoints(&image_tree_node.image, &img_gradient);
         println!("-- SIFT Descriptors --");
-        // imgHarrisKeypoints = computeHarrisKeypoints(imgNode["img"], imgGradient)
-        // print("-- SIFT Descriptors --")
         // imgKeypoints = getKeypointDescriptors(imgNode["img"], imgGradient, imgHarrisKeypoints)
         // imgNode["keypoints"] = imgKeypoints
     } else {
@@ -566,49 +619,64 @@ fn main() {
     //     y: building_img_g_grad_y,
     // } = get_image_gradients(&building_img_g);
 
-    println!("0.1");
-    let rainier_image =
-        load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier1.png");
-    let rainier_image_nd = image_to_ndarray_rgb(rainier_image.clone());
-    let rainier_image_conv = ndarray_to_image_rgb(rainier_image_nd.clone());
-    let ImageGradientsGray {
-        x: rainier_grad_x,
-        y: rainier_grad_y,
-    } = get_image_gradients(&rainier_image_nd);
-    println!("0.5");
-    let rainier_grad_x_img =
-        ndarray_to_image_gray(rainier_grad_x.clone(), ImgConversionType::NORMALIZE);
-    println!("0.6");
-    let rainier_grad_y_img =
-        ndarray_to_image_gray(rainier_grad_y.clone(), ImgConversionType::NORMALIZE);
+    let kernel = gaussian_kernel_2d(1, Some(0.85));
+    // let kernel2 = gaussian_kernel_2d(2, None);
 
-    println!("1");
-    let img_gradient = get_image_gradients(&rainier_image_nd);
-    println!("2");
-    let img_harris_keypoints = compute_harris_keypoints(&rainier_image_nd, &img_gradient);
-    println!("3");
-    let rainier_annotated = draw_key_points(&rainier_image, &img_harris_keypoints);
+    println!("{:?}", kernel);
+    // println!("{:?}", kernel2);
 
-    println!("Opening windows");
-    windows.push(show_rgb_image(rainier_image.clone(), "rainier_image"));
-    windows.push(show_rgb_image(
-        rainier_image_conv.clone(),
-        "rainier_image_conv",
-    ));
-    windows.push(show_grayscale_image(
-        rainier_grad_x_img.clone(),
-        "rainier_grad_x_img",
-    ));
-    windows.push(show_grayscale_image(
-        rainier_grad_y_img.clone(),
-        "rainier_grad_y_img",
-    ));
-    windows.push(show_rgb_image(
-        rainier_annotated.clone(),
-        "rainier_annotated",
-    ));
+    // println!("0.1");
+    // let rainier_image =
+    //     load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier1.png");
+    // let rainier_image_nd = image_to_ndarray_rgb(rainier_image.clone());
+    // let rainier_image_conv = ndarray_to_image_rgb(rainier_image_nd.clone());
+    // let ImageGradientsGray {
+    //     x: rainier_grad_x,
+    //     y: rainier_grad_y,
+    // } = get_image_gradients(&rainier_image_nd);
+    // println!("0.5");
+    // let rainier_grad_x_img =
+    //     ndarray_to_image_gray(rainier_grad_x.clone(), ImgConversionType::NORMALIZE);
+    // let gaussian_blur_kernel = Array2::from_shape_vec((3, 3), GAUSSIAN_BASIC.to_vec()).unwrap();
+    // let rainier_grad_x_blurred_img = ndarray_to_image_gray(
+    //     filter_2d(&rainier_grad_x, &gaussian_blur_kernel),
+    //     ImgConversionType::NORMALIZE,
+    // );
+    // println!("0.6");
+    // let rainier_grad_y_img =
+    //     ndarray_to_image_gray(rainier_grad_y.clone(), ImgConversionType::NORMALIZE);
 
-    println!("Windows opened");
+    // println!("1");
+    // let img_gradient = get_image_gradients(&rainier_image_nd);
+    // println!("2");
+    // let img_harris_keypoints = compute_harris_keypoints(&rainier_image_nd, &img_gradient);
+    // println!("3");
+    // let rainier_annotated = draw_key_points(&rainier_image, &img_harris_keypoints);
+
+    // println!("Opening windows");
+    // windows.push(show_rgb_image(rainier_image.clone(), "rainier_image"));
+    // windows.push(show_rgb_image(
+    //     rainier_image_conv.clone(),
+    //     "rainier_image_conv",
+    // ));
+    // windows.push(show_grayscale_image(
+    //     rainier_grad_x_img.clone(),
+    //     "rainier_grad_x_img",
+    // ));
+    // windows.push(show_grayscale_image(
+    //     rainier_grad_x_blurred_img.clone(),
+    //     "rainier_grad_x_blurred_img",
+    // ));
+    // windows.push(show_grayscale_image(
+    //     rainier_grad_y_img.clone(),
+    //     "rainier_grad_y_img",
+    // ));
+    // windows.push(show_rgb_image(
+    //     rainier_annotated.clone(),
+    //     "rainier_annotated",
+    // ));
+
+    // println!("Windows opened");
 
     wait_for_windows_to_close(windows);
 }
