@@ -46,6 +46,11 @@ struct ImageGradients {
     y: NDRgbImage,
 }
 
+struct ImageGradientsGray {
+    x: NDRgbImage,
+    y: NDRgbImage,
+}
+
 struct ImageTreeNode {
     image: NDRgbImage,
     key_points: Option<Vec<KeyPoint>>,
@@ -53,10 +58,7 @@ struct ImageTreeNode {
 }
 
 fn show_image(img: DynamicImage, name: &str) -> WindowProxy {
-    let mut options = WindowOptions::new();
-    options = options.set_preserve_aspect_ratio(true);
-    // options.
-    let window = show_image::create_window(name, options).unwrap();
+    let window = show_image::create_window(name, Default::default()).unwrap();
     window.set_image(name, img).unwrap();
     // show_image::back
     window
@@ -75,6 +77,9 @@ struct WindowStatus {
 }
 
 fn wait_for_windows_to_close(windows: Vec<WindowProxy>) {
+    if windows.len() == 0 {
+        return;
+    }
     let (tx, rx) = channel();
     for window in &windows {
         let _tx = tx.clone();
@@ -108,6 +113,19 @@ fn merge_img_channels(img: &SplitImage) -> NDRgbImage {
     concatenate(Axis(2), &[img.r.view(), img.g.view(), img.b.view()]).unwrap()
 }
 
+fn rgb_img_to_grayscale(img: &NDRgbImage) -> NDGrayImage {
+    let img_shape = img.shape();
+    let mut out = Array3::zeros((img_shape[0], img_shape[1], 1));
+    for x in 0..img_shape[0] {
+        for y in 0..img_shape[1] {
+            // http://www.songho.ca/dsp/luminance/luminance.html
+            out[[x, y, 0]] =
+                0.288 * img[[x, y, 0]] + 0.587 * img[[x, y, 1]] + 0.114 * img[[x, y, 2]];
+        }
+    }
+    out
+}
+
 fn image_to_ndarray_rgb(img: RgbImage) -> NDRgbImage {
     let mut out = Array3::zeros((img.width() as usize, img.height() as usize, 3));
     for x in 0..img.width() as usize {
@@ -137,7 +155,7 @@ fn ndarray_to_image_rgb(img: NDRgbImage) -> RgbImage {
     let mut out = RgbImage::new(img_shape[0] as u32, img_shape[1] as u32);
     for x in 0..img_shape[0] {
         for y in 0..img_shape[1] {
-            let clamp = |val: f32| val.min(0f32).max(255f32) as u8;
+            let clamp = |val: f32| val.max(0f32).min(255f32).round() as u8;
             let r = clamp(img[[x, y, 0]]);
             let g = clamp(img[[x, y, 1]]);
             let b = clamp(img[[x, y, 2]]);
@@ -169,8 +187,8 @@ fn ndarray_to_image_grey(img: NDGrayImage, conversion_type: ImgConversionType) -
     for x in 0..img_shape[0] {
         for y in 0..img_shape[1] {
             let convert = |val: f32| match conversion_type {
-                ImgConversionType::NORMALIZE => (255f32 * val.min(0f32) / max_val) as u8,
-                ImgConversionType::CLAMP => val.min(0f32).max(255f32) as u8,
+                ImgConversionType::NORMALIZE => (255f32 * val.max(0f32) / max_val).round() as u8,
+                ImgConversionType::CLAMP => val.max(0f32).min(255f32).round() as u8,
             };
             let r = convert(img[[x, y, 0]]);
             out.put_pixel(x as u32, y as u32, Luma::from([r]));
@@ -183,13 +201,13 @@ fn filter_2d(img: &NDGrayImage, kernel: &Array2<f32>) -> NDGrayImage {
     let img_shape = img.shape();
     let kernel_shape = kernel.shape();
     let mut out = Array3::zeros((img_shape[0], img_shape[1], img_shape[2]));
-    let half_kernel_width = ((kernel_shape[0] as f32) / 2.).floor() as isize;
-    let half_kernel_height = ((kernel_shape[1] as f32) / 2.).floor() as isize;
+    let half_kernel_width = ((kernel_shape[0] as f32) / 2.).floor() as i64;
+    let half_kernel_height = ((kernel_shape[1] as f32) / 2.).floor() as i64;
     let mut relative_kernel_positions = Array3::zeros((kernel_shape[0], kernel_shape[1], 2));
     for x in 0..kernel_shape[0] {
         for y in 0..kernel_shape[1] {
-            relative_kernel_positions[[x, y, 0]] = -half_kernel_width + x as isize;
-            relative_kernel_positions[[x, y, 1]] = -half_kernel_height + y as isize;
+            relative_kernel_positions[[x, y, 0]] = -half_kernel_width + (x as i64);
+            relative_kernel_positions[[x, y, 1]] = -half_kernel_height + (y as i64);
         }
     }
     for x in 0..img_shape[0] {
@@ -198,11 +216,15 @@ fn filter_2d(img: &NDGrayImage, kernel: &Array2<f32>) -> NDGrayImage {
             for k_x in 0..kernel_shape[0] {
                 for k_y in 0..kernel_shape[1] {
                     let relative_position_x =
-                        relative_kernel_positions[[k_x as usize, k_y as usize, 0]] as usize;
+                        relative_kernel_positions[[k_x as usize, k_y as usize, 0]];
                     let relative_position_y =
-                        relative_kernel_positions[[k_x as usize, k_y as usize, 1]] as usize;
-                    let p_x = (x + relative_position_x).min(0).max(img_shape[0] - 1);
-                    let p_y = (y + relative_position_y).min(0).max(img_shape[1] - 1);
+                        relative_kernel_positions[[k_x as usize, k_y as usize, 1]];
+                    let p_x = (x as i64 + relative_position_x)
+                        .max(0)
+                        .min(img_shape[0] as i64 - 1) as usize;
+                    let p_y = (y as i64 + relative_position_y)
+                        .max(0)
+                        .min(img_shape[1] as i64 - 1) as usize;
                     let pixel_value = img[[p_x, p_y, 0]];
                     let kernel_value = kernel[[k_x, k_y]];
                     final_val += pixel_value * kernel_value;
@@ -214,7 +236,7 @@ fn filter_2d(img: &NDGrayImage, kernel: &Array2<f32>) -> NDGrayImage {
     out
 }
 
-fn get_image_gradients(img: &NDRgbImage) -> ImageGradients {
+fn get_image_gradients(img: &NDRgbImage) -> ImageGradientsGray {
     let sobel_x = Array2::from_shape_vec(
         (3, 3),
         vec![1f32, 0f32, -1f32, 2f32, 0f32, -2f32, 1f32, 0f32, -1f32],
@@ -227,27 +249,27 @@ fn get_image_gradients(img: &NDRgbImage) -> ImageGradients {
     .unwrap();
 
     let SplitImage { r, g, b } = split_img_channels(img);
-    ImageGradients {
-        x: merge_img_channels(&SplitImage {
+    ImageGradientsGray {
+        x: rgb_img_to_grayscale(&merge_img_channels(&SplitImage {
             r: filter_2d(&r, &sobel_x),
             g: filter_2d(&g, &sobel_x),
             b: filter_2d(&b, &sobel_x),
-        }),
-        y: merge_img_channels(&SplitImage {
+        })),
+        y: rgb_img_to_grayscale(&merge_img_channels(&SplitImage {
             r: filter_2d(&r, &sobel_y),
             g: filter_2d(&g, &sobel_y),
             b: filter_2d(&b, &sobel_y),
-        }),
+        })),
     }
 }
 
 fn get_blended_circle_pixel(
     pixel_color: &[u8; 3],
-    pixel_x: isize,
-    pixel_y: isize,
+    pixel_x: i64,
+    pixel_y: i64,
     circle_color: &[u8; 3],
-    circle_center_x: isize,
-    circle_center_y: isize,
+    circle_center_x: i64,
+    circle_center_y: i64,
     circle_radius: f64,
     stroke_size: f32,
 ) -> Option<[u8; 3]> {
@@ -289,11 +311,11 @@ fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
         for (i, key_point) in key_points.iter().enumerate() {
             if let Some(blended_color) = get_blended_circle_pixel(
                 &[img_color[0], img_color[1], img_color[2]],
-                x as isize,
-                y as isize,
+                x as i64,
+                y as i64,
                 &key_point_colors[i],
-                key_point.x as isize,
-                key_point.y as isize,
+                key_point.x as i64,
+                key_point.y as i64,
                 2f64,
                 1f32,
             ) {
@@ -307,11 +329,46 @@ fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
     result
 }
 
-// fn compute_harris_response(image: &RgbImage, image_gradients: &ImageGradients) {
+fn multiply_per_pixel(img1: &NDGrayImage, img2: &NDGrayImage) -> NDGrayImage {
+    let img_shape = img1.shape();
+    let mut out = Array3::zeros((img_shape[0], img_shape[1], 1));
+    for x in 0..img_shape[0] {
+        for y in 0..img_shape[1] {
+            out[[x, y, 0]] = img1[[x, y, 0]] * img2[[x, y, 1]]
+        }
+    }
+    out
+}
 
-// }
+fn compute_harris_response(image: &NDRgbImage, image_gradients: &ImageGradientsGray) {
+    let mut harris_matrices = [
+        multiply_per_pixel(&image_gradients.x, &image_gradients.x),
+        multiply_per_pixel(&image_gradients.x, &image_gradients.y),
+        multiply_per_pixel(&image_gradients.y, &image_gradients.x),
+        multiply_per_pixel(&image_gradients.y, &image_gradients.y),
+    ];
+    let gaussian_blur_kernel = Array2::from_shape_vec(
+        (3, 3),
+        vec![
+            1f32 / 16f32,
+            1f32 / 8f32,
+            1f32 / 16f32,
+            1f32 / 8f32,
+            1f32 / 4f32,
+            1f32 / 8f32,
+            1f32 / 16f32,
+            1f32 / 8f32,
+            1f32 / 16f32,
+        ],
+    )
+    .unwrap();
+    for i in 0..harris_matrices.len() {
+        harris_matrices[i] = filter_2d(&harris_matrices[i], &gaussian_blur_kernel);
+    }
+    // compute corner strengths
+}
 
-// fn compute_harris_keypoints(image: &RgbImage, image_gradients: &ImageGradients) {
+// fn compute_harris_keypoints(image: &NDRgbImage, image_gradients: &ImageGradients) {
 
 // }
 
@@ -334,8 +391,8 @@ fn main() {
 
     let building_img =
         load_rgb_image_from_file("../featureMatcher/image_sets/panorama/pano1_0008.png");
-    let pixel = building_img.get_pixel(building_img.width() - 1, building_img.height() - 1);
-    println!("{}, {}, {}", pixel[0], pixel[1], pixel[2]);
+    // let pixel = building_img.get_pixel(building_img.width() - 1, building_img.height() - 1);
+    // println!("{}, {}, {}", pixel[0], pixel[1], pixel[2]);
 
     // let image_file_result = image::open("../featureMatcher/image_sets/project_images/Rainier1.png");
     // let image_file = image_file_result.unwrap();
@@ -351,15 +408,20 @@ fn main() {
     //     image_file.as_bgr8(),
     // );
 
-    // let rainier_image_tree = ImageTreeNode {
-    //     image: rainier_image_tree_img,
-    //     children: Some(vec![ImageTreeNode {
-    //         image: load_rgb_image_from_file("../featureMatcher/image_sets/panorama/pano1_0008.png"),
-    //         children: None,
-    //         key_points: None,
-    //     }]),
-    //     key_points: None,
-    // };
+    let rainier_1_image =
+        load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier1.png");
+    let rainier_2_image =
+        load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier2.png");
+
+    let rainier_image_tree = ImageTreeNode {
+        image: image_to_ndarray_rgb(rainier_1_image),
+        children: Some(vec![ImageTreeNode {
+            image: image_to_ndarray_rgb(rainier_2_image),
+            children: None,
+            key_points: None,
+        }]),
+        key_points: None,
+    };
 
     // let building_img_w_key_points = draw_key_points(
     //     &building_img,
@@ -397,8 +459,17 @@ fn main() {
         load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier1.png");
     let rainier_image_nd = image_to_ndarray_rgb(rainier_image.clone());
     let rainier_image_conv = ndarray_to_image_rgb(rainier_image_nd.clone());
-    // let rainier_grad = get_image_gradients(&rainier_image_nd);
-    // let rainier_grad_img = ndarray_to_image_rgb(get_image_gradients(&rainier_image_nd));
+    let ImageGradientsGray {
+        x: rainier_grad_x,
+        y: rainier_grad_y,
+    } = get_image_gradients(&rainier_image_nd);
+    let rainier_grad_x_r = split_img_channels(&rainier_grad_x).r;
+    let rainier_grad_x_r_img_norm =
+        ndarray_to_image_grey(rainier_grad_x_r.clone(), ImgConversionType::NORMALIZE);
+    let rainier_grad_x_r_img_clamp =
+        ndarray_to_image_grey(rainier_grad_x_r.clone(), ImgConversionType::CLAMP);
+    let rainier_grad_x_img = ndarray_to_image_rgb(rainier_grad_x.clone());
+    let rainier_grad_y_img = ndarray_to_image_rgb(rainier_grad_y.clone());
 
     println!("Opening windows");
     windows.push(show_rgb_image(rainier_image.clone(), "rainier_image"));
@@ -406,23 +477,24 @@ fn main() {
         rainier_image_conv.clone(),
         "rainier_image_conv",
     ));
-    // windows.push(show_rgb_image(rainier_grad.y.clone(), "Rainier grad y"));
+    windows.push(show_rgb_image(
+        rainier_grad_x_img.clone(),
+        "rainier_grad_x_img",
+    ));
+    windows.push(show_rgb_image(
+        rainier_grad_y_img.clone(),
+        "rainier_grad_y_img",
+    ));
+    windows.push(show_grayscale_image(
+        rainier_grad_x_r_img_norm.clone(),
+        "rainier_grad_x_r_img_norm",
+    ));
+    windows.push(show_grayscale_image(
+        rainier_grad_x_r_img_clamp.clone(),
+        "rainier_grad_x_r_img_clamp",
+    ));
 
     println!("Windows opened");
 
     wait_for_windows_to_close(windows);
-    // image::
 }
-
-// fn wait_for_some(receivers: Vec<std::sync::mpsc::Receiver<()>>) {
-//     let (joined_sender, joined_receiver) = std::sync::mpsc::channel();
-//     for receiver in receivers {
-//         let _tx = joined_sender.clone();
-//         thread::spawn(move || {
-//             receiver.recv().unwrap();
-//             _tx.send(()).unwrap();
-//         });
-//     }
-//     joined_receiver.recv().unwrap();
-//     println!("Something was sent on some channel");
-// }
