@@ -25,13 +25,17 @@ use show_image::WindowProxy;
 
 use rand::Rng;
 
-type NDRgbImage = Array3<f32>;
-type NDGrayImage = Array3<f32>;
-
+const TWO_PI: f32 = PI * 2.;
 const SIFT_WINDOW_SIZE: i64 = 8;
-const SIFT_SUB_WINDOWSIZE: i64 = 4;
+const SIFT_BIN_COUNT: usize = 8;
+const SIFT_DESCRIPTOR_LENGTH: usize = 16 * SIFT_BIN_COUNT;
 const MAX_KEYPOINTS_PER_IMAGE: usize = 750;
 const KP_ORIENTATION_WINDOW_SIZE: i64 = 5;
+const GAUSSIAN_SIGMA: f32 = 0.85;
+
+type NDRgbImage = Array3<f32>;
+type NDGrayImage = Array3<f32>;
+type SiftDescriptor = [f32; SIFT_DESCRIPTOR_LENGTH];
 
 // TODO: use f64 instead of f32?
 
@@ -60,18 +64,20 @@ const GAUSSIAN_: [f32; 9] = [
     1f32 / 16f32,
 ];
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 struct KeyPoint {
     x: i64,
     y: i64,
     value: f32,
 }
+
+#[derive(Clone, Debug)]
 struct DescriptedKeyPoint {
     x: i64,
     y: i64,
     value: f32,
     orientation: f32,
-    descriptor: f32,
+    descriptor: SiftDescriptor,
 }
 
 struct SplitImage {
@@ -92,7 +98,7 @@ struct ImageGradientsGray {
 
 struct ImageTreeNode {
     image: NDRgbImage,
-    key_points: Option<Vec<KeyPoint>>,
+    key_points: Option<Vec<DescriptedKeyPoint>>,
     children: Option<Vec<ImageTreeNode>>,
 }
 
@@ -416,9 +422,9 @@ fn compute_harris_response(img: &NDRgbImage, img_gradients: &ImageGradientsGray)
         multiply_per_pixel(&img_gradients.y, &img_gradients.x),
         multiply_per_pixel(&img_gradients.y, &img_gradients.y),
     ];
-    let gaussian_blur_kernel = gaussian_kernel_2d(5, Some(0.85));
+    let gaussian_kernel = gaussian_kernel_2d(5, Some(GAUSSIAN_SIGMA));
     for i in 0..harris_matrices.len() {
-        harris_matrices[i] = filter_2d(&harris_matrices[i], &gaussian_blur_kernel);
+        harris_matrices[i] = filter_2d(&harris_matrices[i], &gaussian_kernel);
     }
     let img_shape = img.shape();
     let mut corner_strengths = Array3::zeros((img_shape[0], img_shape[1], 1));
@@ -464,10 +470,10 @@ fn is_max_among_neighbors(img: &NDRgbImage, x: i64, y: i64) -> bool {
 }
 
 fn point_near_boundary(x: i64, y: i64, img_width: i64, img_height: i64) -> bool {
-    x < SIFT_WINDOW_SIZE
-        || y < SIFT_WINDOW_SIZE
-        || x > img_width - SIFT_WINDOW_SIZE
-        || y > img_height - SIFT_WINDOW_SIZE
+    x < SIFT_WINDOW_SIZE + 1
+        || y < SIFT_WINDOW_SIZE + 1
+        || x > img_width - SIFT_WINDOW_SIZE - 1
+        || y > img_height - SIFT_WINDOW_SIZE - 1
 }
 
 fn compute_harris_keypoints(img: &NDRgbImage, img_gradients: &ImageGradientsGray) -> Vec<KeyPoint> {
@@ -530,42 +536,217 @@ fn get_parabola_vertex(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32) -> 
     (-b / (2. * a), ((c - b * b) / (4. * a)))
 }
 
-fn get_key_point_orientation(
-    key_point: KeyPoint,
-    gradient_magnitudes: Array3<f32>,
-    gradient_directions: Array3<f32>,
-) {
+fn get_key_point_orientations(
+    key_point: &KeyPoint,
+    gradient_magnitudes: &Array3<f32>,
+    gradient_directions: &Array3<f32>,
+) -> Vec<f32> {
     let img_shape = gradient_magnitudes.shape();
-    let gaussian_kernel = gaussian_kernel_2d(5, Some(0.85));
+
+    let gaussian_kernel =
+        gaussian_kernel_2d(KP_ORIENTATION_WINDOW_SIZE as u16, Some(GAUSSIAN_SIGMA));
     let neighborhood = (
         (
             (key_point.x - KP_ORIENTATION_WINDOW_SIZE).max(0),
             (key_point.y - KP_ORIENTATION_WINDOW_SIZE).max(0),
         ),
         (
-            (key_point.x + KP_ORIENTATION_WINDOW_SIZE).min(img_shape[0] as i64),
-            (key_point.y + KP_ORIENTATION_WINDOW_SIZE).min(img_shape[1] as i64),
+            (key_point.x + KP_ORIENTATION_WINDOW_SIZE + 1).min(img_shape[0] as i64),
+            (key_point.y + KP_ORIENTATION_WINDOW_SIZE + 1).min(img_shape[1] as i64),
         ),
     );
 
-    const two_pi: f32 = PI * 2.;
-    const bin_count: usize = 10;
-    let orientation_vote_count = [0 as i64; bin_count];
-    for x in (neighborhood.0 .0)..(neighborhood.0 .1) {
+    // println!(
+    //     "yope 1 img_shape={:?}, neighhb={:?}",
+    //     img_shape, neighborhood
+    // );
+    const BIN_COUNT: usize = 10;
+    let mut orientation_votes = [0 as f32; BIN_COUNT];
+    for x in (neighborhood.0 .0)..(neighborhood.1 .0) {
         for y in (neighborhood.0 .1)..(neighborhood.1 .1) {
+            // println!(
+            //     "x={}, y={}, key_point.x={}, key_point.y={}, f_y={:?}",
+            //     x,
+            //     y,
+            //     key_point.x,
+            //     key_point.y,
+            //     (y - key_point.y + KP_ORIENTATION_WINDOW_SIZE) as usize,
+            // );
             let gradient_direction =
-                (((gradient_directions[[x as usize, y as usize, 0]] + two_pi) % two_pi) / (two_pi))
-                    .floor() as usize;
-            // TODO: binIndex = math.floor(binCount * gradientDirections[x][y] / (math.pi * 2))
+                ((gradient_directions[[x as usize, y as usize, 0]] + TWO_PI) % TWO_PI) / (TWO_PI);
+            let bin_index = (BIN_COUNT as f32 * gradient_direction).floor() as usize;
+            let gaussian_factor = gaussian_kernel[[
+                (x - key_point.x + KP_ORIENTATION_WINDOW_SIZE) as usize,
+                (y - key_point.y + KP_ORIENTATION_WINDOW_SIZE) as usize,
+            ]];
+            let bin_value = gaussian_factor * gradient_magnitudes[[x as usize, y as usize, 0]];
+            orientation_votes[bin_index] += bin_value;
         }
     }
+    let dominant_bin_value =
+        orientation_votes
+            .iter()
+            .fold(0f32, |acc, val| if val > &acc { *val } else { acc });
+    let peak_bin_indices: Vec<usize> = orientation_votes
+        .iter()
+        .cloned()
+        .enumerate()
+        .filter(|(_, val)| *val > dominant_bin_value * 0.8f32)
+        .map(|(i, _)| i)
+        .collect();
+    peak_bin_indices
+        .iter()
+        .cloned()
+        .map(|peak_bin_index| {
+            let left_index = peak_bin_index - 1;
+            let right_index = peak_bin_index + 2;
+            let parabolic_average_index = get_parabola_vertex(
+                left_index as f32,
+                orientation_votes[(left_index + BIN_COUNT) % BIN_COUNT],
+                peak_bin_index as f32,
+                orientation_votes[peak_bin_index],
+                right_index as f32,
+                orientation_votes[(peak_bin_index + 2) % BIN_COUNT],
+            )
+            .0;
+            ((parabolic_average_index / BIN_COUNT as f32) % BIN_COUNT as f32) * TWO_PI
+        })
+        .collect()
+}
+
+fn get_key_point_descriptor(
+    key_point: &KeyPoint,
+    gradient_magnitudes: &Array3<f32>,
+    gradient_directions: &Array3<f32>,
+    key_point_orientation: f32,
+) -> SiftDescriptor {
+    let img_shape = gradient_magnitudes.shape();
+    let gaussian_kernel = gaussian_kernel_2d(SIFT_WINDOW_SIZE as u16, Some(GAUSSIAN_SIGMA));
+    let neighborhood = (
+        (
+            (key_point.x - SIFT_WINDOW_SIZE),
+            (key_point.y - SIFT_WINDOW_SIZE),
+        ),
+        (
+            (key_point.x + SIFT_WINDOW_SIZE),
+            (key_point.y + SIFT_WINDOW_SIZE),
+        ),
+    );
+    let relative_gradient_directions =
+        gradient_directions.map(|direction| (direction - key_point_orientation + TWO_PI) % TWO_PI);
+
+    // println!(
+    //     "yope 1 img_shape={:?}, neighhb={:?}",
+    //     img_shape, neighborhood
+    // );
+    let mut descriptor_2: SiftDescriptor = [0 as f32; SIFT_DESCRIPTOR_LENGTH];
+    // let mut descriptor: Vec<f32> = Vec::new();
+    for i in 0..4 {
+        for j in 0..4 {
+            let start_x = neighborhood.0 .0 + (i * 4);
+            let start_y = neighborhood.0 .1 + (j * 4);
+            let sub_neighborhood = ((start_x, start_y), (start_x + 4, start_y + 4));
+
+            // println!("subneighhb={:?}", sub_neighborhood);
+
+            // let mut orientation_vote_counts = [0 as f32; SIFT_BIN_COUNT];
+            for x in (sub_neighborhood.0 .0)..(sub_neighborhood.1 .0) {
+                for y in (sub_neighborhood.0 .1)..(sub_neighborhood.1 .1) {
+                    // println!(
+                    //     "x={}, y={}, key_point.x={}, key_point.y={}, f_y={:?}",
+                    //     x,
+                    //     y,
+                    //     key_point.x,
+                    //     key_point.y,
+                    //     (y - key_point.y + SIFT_WINDOW_SIZE) as usize,
+                    // );
+                    let bin_index = (SIFT_BIN_COUNT as f32
+                        * relative_gradient_directions[[x as usize, y as usize, 0]]
+                        / TWO_PI)
+                        .floor() as usize;
+                    let gaussian_factor = gaussian_kernel[[
+                        (x - key_point.x + SIFT_WINDOW_SIZE) as usize,
+                        (y - key_point.y + SIFT_WINDOW_SIZE) as usize,
+                    ]];
+                    // orientation_vote_counts[bin_index] +=
+                    //     gaussian_factor * gradient_magnitudes[[x as usize, y as usize, 0]];
+                    let descriptor_index = ((i * 4 + j) * SIFT_BIN_COUNT as i64) + bin_index as i64;
+                    // println!("descriptor_index={:?}", descriptor_index);
+                    descriptor_2[descriptor_index as usize] +=
+                        gaussian_factor * gradient_magnitudes[[x as usize, y as usize, 0]];
+                }
+            }
+            // descriptor.append(&mut orientation_vote_counts.to_vec());
+        }
+    }
+
+    // panic!();
+
+    // println!(
+    //     "descriptor len={:?}, descriptor_2 len={:?}",
+    //     descriptor.len(),
+    //     descriptor_2.len()
+    // );
+
+    // println!(
+    //     "descriptor={:?}, descriptor_2={:?}",
+    //     descriptor, descriptor_2
+    // );
+
+    let mut descriptors_are_equal = true;
+
+    // for (i, val) in descriptor.iter().enumerate() {
+    //     if *val != descriptor_2[i] {
+    //         descriptors_are_equal = false;
+    //     }
+    // }
+
+    if !descriptors_are_equal {
+        println!(
+            "descriptors_are_equal={:?}!!!!!!!!!!!!",
+            descriptors_are_equal
+        );
+    }
+
+    let final_descriptor = normalize_sift_descriptor(&mut clip_sift_descriptor(
+        &mut normalize_sift_descriptor(&mut descriptor_2),
+        0.2f32,
+    ));
+
+    final_descriptor
+}
+
+fn normalize_vec(vec: &Vec<f32>) -> Vec<f32> {
+    let norm = vec.iter().fold(0f32, |acc, val| acc + val * val).sqrt();
+    vec.iter().cloned().map(|val| val / norm).collect()
+}
+
+fn normalize_sift_descriptor(arr: &mut SiftDescriptor) -> SiftDescriptor {
+    let mut total_of_squares = 0f32;
+    for i in 0..arr.len() {
+        total_of_squares += arr[i] * arr[i];
+    }
+    let total_of_squares_sqrt = total_of_squares.sqrt();
+    for i in 0..arr.len() {
+        arr[i] /= total_of_squares_sqrt;
+    }
+    *arr
+}
+
+fn clip_sift_descriptor(arr: &mut SiftDescriptor, max: f32) -> SiftDescriptor {
+    for i in 0..arr.len() {
+        if arr[i] > max {
+            arr[i] = max
+        }
+    }
+    *arr
 }
 
 fn get_keypoint_descriptors(
     img: &NDRgbImage,
     img_gradients: &ImageGradientsGray,
     key_points: &Vec<KeyPoint>,
-) {
+) -> Vec<DescriptedKeyPoint> {
     let img_shape = img.shape();
     let mut gradient_magnitudes = Array3::zeros((img_shape[0], img_shape[1], 1));
     let mut gradient_directions = Array3::zeros((img_shape[0], img_shape[1], 1));
@@ -579,7 +760,43 @@ fn get_keypoint_descriptors(
                 (img_gradients.y[[x, y, 0]]).atan2(img_gradients.x[[x, y, 0]]) + PI;
         }
     }
-    let descripted_key_points: Vec<DescriptedKeyPoint> = Vec::new();
+    let mut count = 0;
+    let mut descripted_key_points: Vec<DescriptedKeyPoint> = Vec::new();
+    for key_point in key_points {
+        let orientations =
+            get_key_point_orientations(&key_point, &gradient_magnitudes, &gradient_directions);
+        let descriptors: Vec<SiftDescriptor> = orientations
+            .iter()
+            .cloned()
+            .map(|orientation| {
+                get_key_point_descriptor(
+                    &key_point,
+                    &gradient_magnitudes,
+                    &gradient_directions,
+                    orientation,
+                )
+            })
+            .collect();
+        let mut new_key_points: Vec<DescriptedKeyPoint> = descriptors
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, descriptor)| DescriptedKeyPoint {
+                x: key_point.x,
+                y: key_point.y,
+                value: key_point.value,
+                orientation: orientations[i],
+                descriptor,
+            })
+            .collect();
+        count += 1;
+        if count % 100 == 0 {
+            println!("Done {:?} / {:?} keypoints", count, key_points.len());
+        }
+        descripted_key_points.append(&mut new_key_points);
+    }
+    println!("New keypoint count: {:?}", descripted_key_points.len());
+    descripted_key_points
 }
 
 fn do_sift(image_tree_node: &mut ImageTreeNode) {
@@ -588,8 +805,9 @@ fn do_sift(image_tree_node: &mut ImageTreeNode) {
         let img_gradient = get_image_gradients(&image_tree_node.image);
         let img_harris_keypoints = compute_harris_keypoints(&image_tree_node.image, &img_gradient);
         println!("-- SIFT Descriptors --");
-        // imgKeypoints = getKeypointDescriptors(imgNode["img"], imgGradient, imgHarrisKeypoints)
-        // imgNode["keypoints"] = imgKeypoints
+        let img_descripted_keypoints =
+            get_keypoint_descriptors(&image_tree_node.image, &img_gradient, &img_harris_keypoints);
+        image_tree_node.key_points = Some(img_descripted_keypoints);
     } else {
         println!("Keypoints already computed. Skipping this step");
     }
@@ -623,7 +841,7 @@ fn main() {
     let rainier_2_image =
         load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier2.png");
 
-    let rainier_image_tree = ImageTreeNode {
+    let mut rainier_image_tree = ImageTreeNode {
         image: image_to_ndarray_rgb(rainier_1_image),
         children: Some(vec![ImageTreeNode {
             image: image_to_ndarray_rgb(rainier_2_image),
@@ -632,6 +850,8 @@ fn main() {
         }]),
         key_points: None,
     };
+
+    do_sift(&mut rainier_image_tree);
 
     // let building_img_w_key_points = draw_key_points(
     //     &building_img,
@@ -665,16 +885,31 @@ fn main() {
     //     y: building_img_g_grad_y,
     // } = get_image_gradients(&building_img_g);
 
-    // let kernel = gaussian_kernel_2d(1, Some(0.85));
+    // let kernel = gaussian_kernel_2d(1, Some(GAUSSIAN_SIGMA));
     // let kernel2 = gaussian_kernel_2d(2, None);
 
     // println!("{:?}", kernel);
     // println!("{:?}", kernel2);
 
     // println!("0.1");
-    // let rainier_image =
-    //     load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier1.png");
-    // let rainier_image_nd = image_to_ndarray_rgb(rainier_image.clone());
+    let rainier_image =
+        load_rgb_image_from_file("../featureMatcher/image_sets/project_images/Rainier1.png");
+    let rainier_image_nd = image_to_ndarray_rgb(rainier_image.clone());
+    // let rainier_image_split = split_img_channels(&rainier_image_nd);
+    // let gaussian_kernel = gaussian_kernel_2d(1, Some(GAUSSIAN_SIGMA));
+    // let rainier_image_split_blurred = SplitImage {
+    //     r: filter_2d(&rainier_image_split.r, &gaussian_kernel),
+    //     g: filter_2d(&rainier_image_split.g, &gaussian_kernel),
+    //     b: filter_2d(&rainier_image_split.b, &gaussian_kernel),
+    // };
+    // let rainier_image_nd_blurred = merge_img_channels(&rainier_image_split_blurred);
+
+    // windows.push(show_rgb_image(rainier_image.clone(), "rainier_image"));
+    // windows.push(show_rgb_image(
+    //     ndarray_to_image_rgb(rainier_image_nd_blurred.clone()),
+    //     "rainier_image_nd_blurred",
+    // ));
+
     // let rainier_image_conv = ndarray_to_image_rgb(rainier_image_nd.clone());
     // let ImageGradientsGray {
     //     x: rainier_grad_x,
@@ -692,12 +927,24 @@ fn main() {
     // let rainier_grad_y_img =
     //     ndarray_to_image_gray(rainier_grad_y.clone(), ImgConversionType::NORMALIZE);
 
-    // println!("1");
-    // let img_gradient = get_image_gradients(&rainier_image_nd);
-    // println!("2");
-    // let img_harris_keypoints = compute_harris_keypoints(&rainier_image_nd, &img_gradient);
-    // println!("3");
-    // let rainier_annotated = draw_key_points(&rainier_image, &img_harris_keypoints);
+    println!("1");
+    let img_gradient = get_image_gradients(&rainier_image_nd);
+    println!("2");
+    let img_harris_keypoints = compute_harris_keypoints(&rainier_image_nd, &img_gradient);
+    println!("3");
+    let rainier_annotated = draw_key_points(&rainier_image, &img_harris_keypoints);
+    let kps: Vec<KeyPoint> = rainier_image_tree
+        .key_points
+        .unwrap()
+        .iter()
+        .cloned()
+        .map(|key_point| KeyPoint {
+            x: key_point.x,
+            y: key_point.y,
+            value: key_point.value,
+        })
+        .collect();
+    let rainier_annotated_2 = draw_key_points(&rainier_image, &kps);
 
     // println!("Opening windows");
     // windows.push(show_rgb_image(rainier_image.clone(), "rainier_image"));
@@ -717,10 +964,14 @@ fn main() {
     //     rainier_grad_y_img.clone(),
     //     "rainier_grad_y_img",
     // ));
-    // windows.push(show_rgb_image(
-    //     rainier_annotated.clone(),
-    //     "rainier_annotated",
-    // ));
+    windows.push(show_rgb_image(
+        rainier_annotated.clone(),
+        "rainier_annotated",
+    ));
+    windows.push(show_rgb_image(
+        rainier_annotated_2.clone(),
+        "rainier_annotated_2",
+    ));
 
     // println!("Windows opened");
 
