@@ -1,4 +1,5 @@
 use std::cmp::Ordering;
+use std::f32::consts::PI;
 use std::sync::mpsc::channel;
 use std::thread;
 
@@ -30,7 +31,7 @@ type NDGrayImage = Array3<f32>;
 const SIFT_WINDOW_SIZE: i64 = 8;
 const SIFT_SUB_WINDOWSIZE: i64 = 4;
 const MAX_KEYPOINTS_PER_IMAGE: usize = 750;
-const KP_ORIENTATION_WINDOWSIZE: i64 = 5;
+const KP_ORIENTATION_WINDOW_SIZE: i64 = 5;
 
 // TODO: use f64 instead of f32?
 
@@ -100,7 +101,7 @@ fn gaussian(x: f32, mu: f32, sigma: f32) -> f32 {
     (-0.5 * a * a).exp()
 }
 
-fn gaussian_kernel_2d(radius: u16, sigma_in: Option<f32>) -> Vec<f32> {
+fn gaussian_kernel_2d(radius: u16, sigma_in: Option<f32>) -> Array2<f32> {
     let sigma = sigma_in.unwrap_or(radius as f32 / 2.);
     let size = 2 * radius as usize + 1;
     let mut kernel = Array2::zeros((size, size));
@@ -118,7 +119,7 @@ fn gaussian_kernel_2d(radius: u16, sigma_in: Option<f32>) -> Vec<f32> {
             kernel[[x, y]] /= sum;
         }
     }
-    kernel // TODO: convert from array2 to vec
+    kernel
 }
 
 fn show_image(img: DynamicImage, name: &str) -> WindowProxy {
@@ -415,21 +416,7 @@ fn compute_harris_response(img: &NDRgbImage, img_gradients: &ImageGradientsGray)
         multiply_per_pixel(&img_gradients.y, &img_gradients.x),
         multiply_per_pixel(&img_gradients.y, &img_gradients.y),
     ];
-    let gaussian_blur_kernel = Array2::from_shape_vec(
-        (3, 3),
-        vec![
-            1f32 / 16f32,
-            1f32 / 8f32,
-            1f32 / 16f32,
-            1f32 / 8f32,
-            1f32 / 4f32,
-            1f32 / 8f32,
-            1f32 / 16f32,
-            1f32 / 8f32,
-            1f32 / 16f32,
-        ],
-    )
-    .unwrap();
+    let gaussian_blur_kernel = gaussian_kernel_2d(5, Some(0.85));
     for i in 0..harris_matrices.len() {
         harris_matrices[i] = filter_2d(&harris_matrices[i], &gaussian_blur_kernel);
     }
@@ -534,7 +521,66 @@ fn compute_harris_keypoints(img: &NDRgbImage, img_gradients: &ImageGradientsGray
     key_points_sliced
 }
 
-fn get_keypoint_descriptors() {}
+fn get_parabola_vertex(x1: f32, y1: f32, x2: f32, y2: f32, x3: f32, y3: f32) -> (f32, f32) {
+    let denom = (x1 - x2) * (x1 - x3) * (x2 - x3);
+    let a = (x3 * (y2 - y1) + x2 * (y1 - y3) + x1 * (y3 - y2)) / denom;
+    let b = (x3 * x3 * (y1 - y2) + x2 * x2 * (y3 - y1) + x1 * x1 * (y2 - y3)) / denom;
+    let c =
+        (x2 * x3 * (x2 - x3) * y1 + x3 * x1 * (x3 - x1) * y2 + x1 * x2 * (x1 - x2) * y3) / denom;
+    (-b / (2. * a), ((c - b * b) / (4. * a)))
+}
+
+fn get_key_point_orientation(
+    key_point: KeyPoint,
+    gradient_magnitudes: Array3<f32>,
+    gradient_directions: Array3<f32>,
+) {
+    let img_shape = gradient_magnitudes.shape();
+    let gaussian_kernel = gaussian_kernel_2d(5, Some(0.85));
+    let neighborhood = (
+        (
+            (key_point.x - KP_ORIENTATION_WINDOW_SIZE).max(0),
+            (key_point.y - KP_ORIENTATION_WINDOW_SIZE).max(0),
+        ),
+        (
+            (key_point.x + KP_ORIENTATION_WINDOW_SIZE).min(img_shape[0] as i64),
+            (key_point.y + KP_ORIENTATION_WINDOW_SIZE).min(img_shape[1] as i64),
+        ),
+    );
+
+    const two_pi: f32 = PI * 2.;
+    const bin_count: usize = 10;
+    let orientation_vote_count = [0 as i64; bin_count];
+    for x in (neighborhood.0 .0)..(neighborhood.0 .1) {
+        for y in (neighborhood.0 .1)..(neighborhood.1 .1) {
+            let gradient_direction =
+                (((gradient_directions[[x as usize, y as usize, 0]] + two_pi) % two_pi) / (two_pi))
+                    .floor() as usize;
+            // TODO: binIndex = math.floor(binCount * gradientDirections[x][y] / (math.pi * 2))
+        }
+    }
+}
+
+fn get_keypoint_descriptors(
+    img: &NDRgbImage,
+    img_gradients: &ImageGradientsGray,
+    key_points: &Vec<KeyPoint>,
+) {
+    let img_shape = img.shape();
+    let mut gradient_magnitudes = Array3::zeros((img_shape[0], img_shape[1], 1));
+    let mut gradient_directions = Array3::zeros((img_shape[0], img_shape[1], 1));
+    for x in 0..img_shape[0] {
+        for y in 0..img_shape[1] {
+            gradient_magnitudes[[x, y, 0]] = (img_gradients.x[[x, y, 0]]
+                * img_gradients.x[[x, y, 0]]
+                + img_gradients.y[[x, y, 0]] * img_gradients.y[[x, y, 0]])
+            .sqrt();
+            gradient_directions[[x, y, 0]] =
+                (img_gradients.y[[x, y, 0]]).atan2(img_gradients.x[[x, y, 0]]) + PI;
+        }
+    }
+    let descripted_key_points: Vec<DescriptedKeyPoint> = Vec::new();
+}
 
 fn do_sift(image_tree_node: &mut ImageTreeNode) {
     if image_tree_node.key_points.is_none() {
@@ -619,10 +665,10 @@ fn main() {
     //     y: building_img_g_grad_y,
     // } = get_image_gradients(&building_img_g);
 
-    let kernel = gaussian_kernel_2d(1, Some(0.85));
+    // let kernel = gaussian_kernel_2d(1, Some(0.85));
     // let kernel2 = gaussian_kernel_2d(2, None);
 
-    println!("{:?}", kernel);
+    // println!("{:?}", kernel);
     // println!("{:?}", kernel2);
 
     // println!("0.1");
