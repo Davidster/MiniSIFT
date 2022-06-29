@@ -140,6 +140,8 @@ fn main() {
         .collect();
     let rainier_annotated_2 = draw_key_points(&rainier_image, &kps);
 
+    rainier_annotated_2.save("out.png").unwrap();
+
     // println!("Opening windows");
     // windows.push(show_rgb_image(rainier_image.clone(), "rainier_image"));
     // windows.push(show_rgb_image(
@@ -158,14 +160,14 @@ fn main() {
     //     rainier_grad_y_img.clone(),
     //     "rainier_grad_y_img",
     // ));
-    windows.push(show_rgb_image(
-        rainier_annotated.clone(),
-        "rainier_annotated",
-    ));
-    windows.push(show_rgb_image(
-        rainier_annotated_2.clone(),
-        "rainier_annotated_2",
-    ));
+    // windows.push(show_rgb_image(
+    //     rainier_annotated.clone(),
+    //     "rainier_annotated",
+    // ));
+    // windows.push(show_rgb_image(
+    //     rainier_annotated_2.clone(),
+    //     "rainier_annotated_2",
+    // ));
 
     // println!("Windows opened");
 

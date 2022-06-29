@@ -479,12 +479,26 @@ pub fn get_keypoint_descriptors(
     descripted_key_points
 }
 
-#[allow(dead_code)]
-pub fn get_sorted_key_point_pairs(
-    _img_1_key_points: &Vec<DescriptedKeyPoint>,
-    _img_2_key_points: &Vec<DescriptedKeyPoint>,
-) {
-    // TODO:
+type KeyPointPair<'a> = (&'a DescriptedKeyPoint, &'a DescriptedKeyPoint, f64);
+
+pub fn get_sorted_key_point_pairs<'a>(
+    img_1_key_points: &'a Vec<DescriptedKeyPoint>,
+    img_2_key_points: &'a Vec<DescriptedKeyPoint>,
+) -> Vec<KeyPointPair<'a>> {
+    let mut all_pairs: Vec<KeyPointPair> = Vec::new();
+    for img_1_key_point in img_1_key_points {
+        for img_2_key_point in img_2_key_points {
+            let mut descriptor_diff_sos = 0.;
+            for i in 0..SIFT_DESCRIPTOR_LENGTH {
+                let diff = img_2_key_point.descriptor[i] - img_1_key_point.descriptor[i];
+                descriptor_diff_sos += diff * diff;
+            }
+            descriptor_diff_sos = descriptor_diff_sos.sqrt();
+            all_pairs.push((&img_1_key_point, &img_2_key_point, descriptor_diff_sos));
+        }
+    }
+    all_pairs.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(Ordering::Equal));
+    all_pairs
 }
 
 pub fn do_sift(image_tree_node: &mut ImageTreeNode) {
@@ -499,4 +513,10 @@ pub fn do_sift(image_tree_node: &mut ImageTreeNode) {
     } else {
         println!("Keypoints already computed. Skipping this step");
     }
+}
+
+pub fn get_homography_from_imagea(
+    image_1_tree_node: &ImageTreeNode,
+    image_2_tree_node: &ImageTreeNode,
+) {
 }
