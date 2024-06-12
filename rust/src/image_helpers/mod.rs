@@ -38,10 +38,11 @@ pub struct ImageGradientsGray {
 
 #[allow(dead_code)]
 pub enum ImgConversionType {
-    CLAMP,
-    NORMALIZE,
+    Clamp,
+    Normalize,
 }
 
+#[allow(dead_code)]
 pub fn show_image(img: DynamicImage, name: &str) -> WindowProxy {
     let window = show_image::create_window(name, Default::default()).unwrap();
     window.set_image(name, img).unwrap();
@@ -49,16 +50,18 @@ pub fn show_image(img: DynamicImage, name: &str) -> WindowProxy {
     window
 }
 
+#[allow(dead_code)]
 pub fn show_rgb_image(img: RgbImage, name: &str) -> WindowProxy {
     show_image(image::DynamicImage::ImageRgb8(img), name)
 }
 
+#[allow(dead_code)]
 pub fn show_gray_image(img: GrayImage, name: &str) -> WindowProxy {
     show_image(image::DynamicImage::ImageLuma8(img), name)
 }
 
 pub fn wait_for_windows_to_close(windows: Vec<WindowProxy>) {
-    if windows.len() == 0 {
+    if windows.is_empty() {
         return;
     }
     let (tx, rx) = channel();
@@ -153,7 +156,7 @@ pub fn ndarray_to_image_gray(img: &NDGrayImage, conversion_type: ImgConversionTy
     let img_shape = img.shape();
     let mut out = GrayImage::new(img_shape[0] as u32, img_shape[1] as u32);
     let mut max_val = 0.;
-    if let ImgConversionType::NORMALIZE = conversion_type {
+    if let ImgConversionType::Normalize = conversion_type {
         for x in 0..img_shape[0] {
             for y in 0..img_shape[1] {
                 let val = img[[x, y, 0]];
@@ -166,8 +169,8 @@ pub fn ndarray_to_image_gray(img: &NDGrayImage, conversion_type: ImgConversionTy
     for x in 0..img_shape[0] {
         for y in 0..img_shape[1] {
             let convert = |val: f64| match conversion_type {
-                ImgConversionType::NORMALIZE => (255. * val.max(0.) / max_val).round() as u8,
-                ImgConversionType::CLAMP => val.max(0.).min(255.).round() as u8,
+                ImgConversionType::Normalize => (255. * val.max(0.) / max_val).round() as u8,
+                ImgConversionType::Clamp => val.max(0.).min(255.).round() as u8,
             };
             let r = convert(img[[x, y, 0]]);
             out.put_pixel(x as u32, y as u32, Luma::from([r]));
@@ -203,6 +206,7 @@ pub fn sample_nd_img(img: &NDRgbImage, x: f64, y: f64) -> [f64; 3] {
     ]
 }
 
+#[allow(dead_code, clippy::too_many_arguments)]
 pub fn get_blended_circle_pixel(
     pixel_color: &[u8; 3],
     pixel_x: i64,
@@ -216,21 +220,21 @@ pub fn get_blended_circle_pixel(
     let dist_x = circle_center_x - pixel_x;
     let dist_y = circle_center_y - pixel_y;
     let dist = ((dist_x.pow(2) + dist_y.pow(2)) as f64).sqrt();
-    let alpha = 0f64.max(1. - ((dist - circle_radius).abs() / stroke_size as f64));
+    let alpha = 0f64.max(1. - ((dist - circle_radius).abs() / stroke_size));
     if alpha > 0. {
         let blended_colors: Vec<u8> = circle_color
             .iter()
             .enumerate()
             // interpolate from img_portion to keypoint_portion by alpha
             .map(|(i, channel)| {
-                let circle_portion = channel.clone() as f64 * alpha;
+                let circle_portion = *channel as f64 * alpha;
                 let img_portion = pixel_color[i] as f64 * (1. - alpha);
                 let final_channel = circle_portion + img_portion;
-                let final_channel_clamped = final_channel
+
+                final_channel
                     .max(u8::MIN as f64)
                     .min(u8::MAX as f64)
-                    .round() as u8;
-                final_channel_clamped
+                    .round() as u8
             })
             .collect();
         let blended_colors_arr = [blended_colors[0], blended_colors[1], blended_colors[2]];
@@ -239,14 +243,15 @@ pub fn get_blended_circle_pixel(
     None
 }
 
-pub fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
+#[allow(dead_code)]
+pub fn draw_key_points(img: &RgbImage, key_points: &[KeyPoint]) -> RgbImage {
     let mut result = RgbImage::new(img.width(), img.height());
     let random_key_point_colors: Vec<[u8; 3]> = (0..key_points.len())
         .map(|_| [rand::random(), rand::random(), rand::random()])
         .collect();
     for (x, y, _) in img.enumerate_pixels() {
         let img_color = img.get_pixel(x, y);
-        result.put_pixel(x, y, img_color.clone());
+        result.put_pixel(x, y, *img_color);
 
         for (i, key_point) in key_points.iter().enumerate() {
             let kp_color = match key_point.color {
@@ -258,8 +263,8 @@ pub fn draw_key_points(img: &RgbImage, key_points: &Vec<KeyPoint>) -> RgbImage {
                 x as i64,
                 y as i64,
                 &kp_color,
-                key_point.x as i64,
-                key_point.y as i64,
+                key_point.x,
+                key_point.y,
                 4.,
                 1.,
             ) {

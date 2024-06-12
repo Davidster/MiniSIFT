@@ -7,11 +7,7 @@ use ndarray::Array3;
 
 use statrs::function::factorial::factorial;
 
-use itertools::Itertools;
-
 use opencv::prelude::*;
-
-use crate::image_helpers;
 
 use super::helpers::*;
 use super::image_helpers::*;
@@ -111,10 +107,8 @@ pub fn filter_2d(img: &NDGrayImage, kernel: &Array2<f64>) -> NDGrayImage {
             let mut final_val = 0.;
             for k_x in 0..kernel_shape[0] {
                 for k_y in 0..kernel_shape[1] {
-                    let relative_position_x =
-                        relative_kernel_positions[[k_x as usize, k_y as usize, 0]];
-                    let relative_position_y =
-                        relative_kernel_positions[[k_x as usize, k_y as usize, 1]];
+                    let relative_position_x = relative_kernel_positions[[k_x, k_y, 0]];
+                    let relative_position_y = relative_kernel_positions[[k_x, k_y, 1]];
                     let p_x = (x as i64 + relative_position_x)
                         .max(0)
                         .min(img_shape[0] as i64 - 1) as usize;
@@ -164,8 +158,8 @@ pub fn compute_harris_response(
         multiply_per_pixel(&img_gradients.y, &img_gradients.y),
     ];
     let gaussian_kernel = gaussian_kernel_2d(5, Some(GAUSSIAN_SIGMA));
-    for i in 0..harris_matrices.len() {
-        harris_matrices[i] = filter_2d(&harris_matrices[i], &gaussian_kernel);
+    for harris_matrix in harris_matrices.iter_mut() {
+        *harris_matrix = filter_2d(harris_matrix, &gaussian_kernel);
     }
     let img_shape = img.shape();
     let mut corner_strengths = Array3::zeros((img_shape[0], img_shape[1], 1));
@@ -267,7 +261,7 @@ pub fn compute_harris_keypoints(
     }
     key_points.sort_unstable_by(|a, b| b.value.partial_cmp(&a.value).unwrap_or(Ordering::Equal));
     let max_keypoint = MAX_KEYPOINTS_PER_IMAGE.min(key_points.len() - 1);
-    let key_points_sliced = (&key_points[..max_keypoint]).to_vec();
+    let key_points_sliced = key_points[..max_keypoint].to_vec();
     println!("Found {:?} keypoints", key_points_sliced.len());
     key_points_sliced
 }
@@ -496,27 +490,27 @@ pub fn get_key_point_descriptor(
 }
 
 #[allow(dead_code)]
-pub fn normalize_vec(vec: &Vec<f64>) -> Vec<f64> {
+pub fn normalize_vec(vec: &[f64]) -> Vec<f64> {
     let norm = vec.iter().fold(0., |acc, val| acc + val * val).sqrt();
     vec.iter().cloned().map(|val| val / norm).collect()
 }
 
 pub fn normalize_sift_descriptor(arr: &mut SiftDescriptor) -> SiftDescriptor {
     let mut total_of_squares = 0.;
-    for i in 0..arr.len() {
-        total_of_squares += arr[i] * arr[i];
+    for item in arr.iter().copied() {
+        total_of_squares += item * item;
     }
     let total_of_squares_sqrt = total_of_squares.sqrt();
-    for i in 0..arr.len() {
-        arr[i] /= total_of_squares_sqrt;
+    for item in arr.iter_mut() {
+        *item /= total_of_squares_sqrt;
     }
     *arr
 }
 
 pub fn clip_sift_descriptor(arr: &mut SiftDescriptor, max: f64) -> SiftDescriptor {
-    for i in 0..arr.len() {
-        if arr[i] > max {
-            arr[i] = max
+    for item in arr.iter_mut() {
+        if *item > max {
+            *item = max
         }
     }
     *arr
@@ -525,7 +519,7 @@ pub fn clip_sift_descriptor(arr: &mut SiftDescriptor, max: f64) -> SiftDescripto
 pub fn get_keypoint_descriptors(
     img: &NDRgbImage,
     img_gradients: &ImageGradientsGray,
-    key_points: &Vec<KeyPoint>,
+    key_points: &[KeyPoint],
 ) -> Vec<DescriptedKeyPoint> {
     let img_shape = img.shape();
     let mut gradient_magnitudes = Array3::zeros((img_shape[0], img_shape[1], 1));
@@ -555,13 +549,13 @@ pub fn get_keypoint_descriptors(
     let mut descripted_key_points: Vec<DescriptedKeyPoint> = Vec::new();
     for key_point in key_points.iter() {
         let orientations =
-            get_key_point_orientations(&key_point, &gradient_magnitudes, &gradient_directions);
+            get_key_point_orientations(key_point, &gradient_magnitudes, &gradient_directions);
         let descriptors: Vec<SiftDescriptor> = orientations
             .iter()
             .cloned()
             .map(|orientation| {
                 get_key_point_descriptor(
-                    &key_point,
+                    key_point,
                     &gradient_magnitudes,
                     &gradient_directions,
                     orientation,
@@ -681,7 +675,7 @@ pub fn get_best_matches_by_ratio_test(
         "{:?} matched points remain after ratio test",
         deduped_matches.len()
     );
-    for mut deduped_match in &mut deduped_matches {
+    for deduped_match in &mut deduped_matches {
         let color = [rand::random(), rand::random(), rand::random()];
         deduped_match.0.color = Some(color);
         deduped_match.1.color = Some(color);
@@ -730,7 +724,7 @@ pub fn dedupe_points<'a>(
 
 pub fn do_sift(image: &NDRgbImage) -> Vec<DescriptedKeyPoint> {
     println!("-- Image gradients --");
-    let img_gradient = get_image_gradients(&image);
+    let img_gradient = get_image_gradients(image);
     // show_gray_image(
     //     ndarray_to_image_gray(&img_gradient.x, ImgConversionType::CLAMP),
     //     "img gradient x",
@@ -740,9 +734,9 @@ pub fn do_sift(image: &NDRgbImage) -> Vec<DescriptedKeyPoint> {
     //     "img gradient y",
     // );
     println!("-- Harris keypoints --");
-    let img_harris_keypoints = compute_harris_keypoints(&image, &img_gradient);
+    let img_harris_keypoints = compute_harris_keypoints(image, &img_gradient);
     println!("-- SIFT Descriptors --");
-    get_keypoint_descriptors(&image, &img_gradient, &img_harris_keypoints)
+    get_keypoint_descriptors(image, &img_gradient, &img_harris_keypoints)
 }
 
 pub fn do_ransac(
@@ -757,7 +751,7 @@ pub fn do_ransac(
         panic!("Point count < 4");
     }
     let max_iterations = (factorial(point_count as u64) / factorial(point_count as u64 - 4)
-        * factorial(4 as u64))
+        * factorial(4_u64))
     .round() as usize;
     let num_iterations = 500.min(max_iterations);
     let mut already_used_quadruples: HashSet<Vec<usize>> = HashSet::new();
@@ -794,7 +788,8 @@ pub fn do_ransac(
         inlier_lists.push(compute_sift_inliers(&matched_key_points, &homography));
     }
     println!("Inlier lists length = {:?}", inlier_lists.len());
-    inlier_lists.sort_unstable_by(|a, b| b.len().cmp(&a.len()));
+    // inlier_lists.sort_unstable_by(|a, b| b.len().cmp(&a.len()));
+    inlier_lists.sort_unstable_by_key(|b| std::cmp::Reverse(b.len()));
 
     let final_inlier_list: Vec<(DescriptedKeyPoint, DescriptedKeyPoint, f64)> = inlier_lists[0]
         .iter()
@@ -822,7 +817,7 @@ pub fn do_ransac(
 }
 
 pub fn compute_sift_inliers<'a>(
-    matched_key_points: &'a Vec<(DescriptedKeyPoint, DescriptedKeyPoint, f64)>,
+    matched_key_points: &'a [(DescriptedKeyPoint, DescriptedKeyPoint, f64)],
     homography: &'a Array2<f64>,
 ) -> Vec<usize> {
     let mut inlier_indices: Vec<usize> = Vec::new();
@@ -853,7 +848,7 @@ pub fn get_point_distance(p1: &Pointf, p2: &Pointf) -> f64 {
     (d_x * d_x + d_y * d_y).sqrt()
 }
 
-pub fn project_point_with_homography<'a>(point: Point, h: &'a Array2<f64>) -> Pointf {
+pub fn project_point_with_homography(point: Point, h: &Array2<f64>) -> Pointf {
     let Point { x, y } = point;
     let denom = h[[2, 0]] * x as f64 + h[[2, 1]] * y as f64 + h[[2, 2]] + 0.00001;
     Pointf {
@@ -924,14 +919,13 @@ fn project_point_in_image(point: Point, descripted_image: &DescriptedImage) -> O
     }
 }
 
-pub fn do_mean_blend(point: Point, descripted_images: &Vec<&DescriptedImage>) -> [f64; 3] {
+pub fn do_mean_blend(point: Point, descripted_images: &[&DescriptedImage]) -> [f64; 3] {
     let successful_projections: Vec<[f64; 3]> = descripted_images
         .iter()
         .cloned()
-        .map(|descripted_image| project_point_in_image(point, descripted_image))
-        .flatten()
+        .filter_map(|descripted_image| project_point_in_image(point, descripted_image))
         .collect();
-    if successful_projections.len() == 0 {
+    if successful_projections.is_empty() {
         return [0.0, 0.0, 0.0];
     }
     let blended: Vec<f64> = successful_projections
@@ -952,9 +946,9 @@ pub fn do_mean_blend(point: Point, descripted_images: &Vec<&DescriptedImage>) ->
 pub fn blend_images(descripted_images: Vec<&DescriptedImage>) -> NDRgbImage {
     let all_projected_corners: Vec<Pointf> = descripted_images
         .iter()
-        .map(|descripted_image| {
+        .flat_map(|descripted_image| {
             let shape = descripted_image.image.shape();
-            let img_corners = vec![(0, 0), (0, shape[1]), (shape[0], 0), (shape[0], shape[1])];
+            let img_corners = [(0, 0), (0, shape[1]), (shape[0], 0), (shape[0], shape[1])];
             match descripted_image.homography.clone() {
                 Some(homography) => {
                     let inverse_homography = get_homography_inverse(&homography);
@@ -980,7 +974,6 @@ pub fn blend_images(descripted_images: Vec<&DescriptedImage>) -> NDRgbImage {
                     .collect::<Vec<Pointf>>(),
             }
         })
-        .flatten()
         .collect();
     let (min, max) = {
         let (_min, _max) = all_projected_corners.iter().fold(

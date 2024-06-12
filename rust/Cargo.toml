@@ -1,5 +1,5 @@
 [package]
-name = "miniSIFT"
+name = "minisift"
 version = "0.1.0"
 edition = "2018"
 # resolver = "2"

@@ -1,4 +1,4 @@
-use ndarray::{Array1, Array2};
+use ndarray::{Array2};
 
 fn gaussian(x: f64, mu: f64, sigma: f64) -> f64 {
     let a = (x - mu) / sigma;

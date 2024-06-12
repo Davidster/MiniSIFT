@@ -2,14 +2,14 @@ mod helpers;
 mod image_helpers;
 mod sift;
 
-use image;
+
 use show_image::WindowProxy;
 
 use std::{env, process};
 
 fn main() {
     show_image::run_context(|| {
-        let mut windows: Vec<WindowProxy> = Vec::new();
+        let windows: Vec<WindowProxy> = Vec::new();
 
         // let window = show_image::create_window("img", Default::default()).unwrap();
         // let width = 500;
@@ -451,7 +451,7 @@ fn main() {
 
         // println!("Windows opened");
 
-        if windows.len() > 0 {
+        if !windows.is_empty() {
             image_helpers::wait_for_windows_to_close(windows);
         }
 
