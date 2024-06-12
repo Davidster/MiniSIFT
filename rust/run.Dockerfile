@@ -1,6 +1,6 @@
 FROM jjanzic/docker-python3-opencv
 
-WORKDIR /root/comp245
+WORKDIR /root/minisift
 
 RUN export DEBIAN_FRONTEND=noninteractive
 RUN export OpenCV_DIR="/usr/local/lib/cmake/opencv4"

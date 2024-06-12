@@ -14,7 +14,7 @@ RED_PIXEL = np.array([0, 0, 255]).astype("uint8")
 BLUE_PIXEL = np.array([255, 0, 0]).astype("uint8")
 GREEN_PIXEL = np.array([0, 255, 0]).astype("uint8")
 
-THREADS = 3
+THREADS = 4
 try:
   THREADS = os.cpu_count() * 2
 except:
@@ -31,7 +31,7 @@ def annotateKeypoints(image, keypoints):
       circlePoint = tuple(circlePoint) 
       circleInterleaver += 1
       if circlePoint not in annotatedPointMap or circleInterleaver % 2 == 0:
-        annotatedPointMap[circlePoint] = ringColor  
+        annotatedPointMap[circlePoint] = ringColor # replace with BLUE_PIXEL if this function is crashing at line 48...
     for linePoint in getLineFromPoint(pos, angle, circleRadius):
       linePoint = tuple(linePoint)
       annotatedPointMap[linePoint] = GREEN_PIXEL 
@@ -309,6 +309,10 @@ def getKeypointDescriptors(image, gradient, keypoints):
   startTime = time.time()
   gradientMagnitudes = np.sqrt(dx * dx + dy * dy)
   gradientDirections = np.arctan2(dy, dx) + math.pi
+
+  # cv.imshow("gradientMagnitudes", gradientMagnitudes * 0.1)
+  # cv.imshow("gradientDirections", gradientDirections * 0.1)
+
   newKeypoints = []
   count = 0
   for keypoint in keypoints:
@@ -533,6 +537,8 @@ def doSIFT(imgNode):
   if imgKeypoints is None:
     print("-- Harris keypoints --")
     imgGradient = getNpGradient2(imgNode["img"])
+    # cv.imshow("img gradient x", imgGradient[0]);
+    # cv.imshow("img gradient y", imgGradient[1]);
     imgHarrisKeypoints = computeHarrisKeypoints(imgNode["img"], imgGradient)
     print("-- SIFT Descriptors --")
     imgKeypoints = getKeypointDescriptors(imgNode["img"], imgGradient, imgHarrisKeypoints)
@@ -543,11 +549,19 @@ def doSIFT(imgNode):
 def getHomographyFromImages(img1Node, img2Node):
   print("-- Image 1 --")
   doSIFT(img1Node)
+  # cv.imshow("img 1 keypoints", annotateKeypoints(img1Node["img"], img1Node["keypoints"]))
   print("-- Image 2 --")
   doSIFT(img2Node)
+  # cv.imshow("img 2 keypoints", annotateKeypoints(img2Node["img"], img2Node["keypoints"]))
 
   print("-- Matching keypoints --")
   sortedKeypointPairs = getSortedKeypointPairs(img1Node["keypoints"], img2Node["keypoints"])
+  # print(sortedKeypointPairs[0])
+  # for _, _, dist in sortedKeypointPairs[:10]:
+  #   print(dist)
+
+  # for _, _, dist in sortedKeypointPairs[-10:]:
+  #   print(dist)
 
   # print("-- SSD Matches --")
   # img1MatchedKeypoints, img2MatchedKeypoints = getBestMatchesByThreshold(sortedKeypointPairs)
@@ -559,8 +573,8 @@ def getHomographyFromImages(img1Node, img2Node):
   # cv.imshow("img2 ratio", annotateKeypoints(img2, img2RatioKeypoints))
   # cv.imshow("img1 SSD", annotateKeypoints(img1, img1SSDKeypoints))
   # cv.imshow("img2 SSD", annotateKeypoints(img2, img2SSDKeypoints))
-  # cv.imshow("img1 ratio", annotateKeypoints(img1, img1RatioKeypoints))
-  # cv.imshow("img2 ratio", annotateKeypoints(img2, img2RatioKeypoints))
+  # cv.imshow("img1 ratio", annotateKeypoints(img1Node["img"], img1MatchedKeypoints))
+  # cv.imshow("img2 ratio", annotateKeypoints(img2Node["img"], img2MatchedKeypoints))
   
   finalHomography, finalImg1Inliers, finalImg2Inliers = doRANSAC(img1MatchedKeypoints, img2MatchedKeypoints, 500)
   # cv.imshow("drawnMatches", getDrawMatchesImg(img1Node["img"], img1MatchedKeypoints, img2Node["img"], img2MatchedKeypoints))
@@ -802,6 +816,8 @@ if __name__== "__main__":
   # rainier1Img = cv.imread("image_sets/project_images/Rainier1.png")
   # rainier1Gradient = getNpGradient2(rainier1Img)
   # rainier1HarrisKeypoints = computeHarrisKeypoints(rainier1Img, rainier1Gradient)
+  # cv.imwrite("grad_x.png", rainier1Gradient[0])
+  # cv.imwrite("grad_y.png", rainier1Gradient[1])
   # cv.imwrite("results/1b.png", getDrawKeypointsImg(rainier1Img, rainier1HarrisKeypoints))
   # # c
   # rainier2Img = cv.imread("image_sets/project_images/Rainier2.png")
@@ -850,5 +866,5 @@ if __name__== "__main__":
 
   print(f"Done end to end in {(time.time() - startTime) * 1000}ms")
 
-  cv.imwrite("out.jpg", panorama)
+  cv.imshow("out.jpg", panorama)
   cv.waitKey(0)

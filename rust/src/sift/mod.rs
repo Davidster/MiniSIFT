@@ -11,6 +11,8 @@ use itertools::Itertools;
 
 use opencv::prelude::*;
 
+use crate::image_helpers;
+
 use super::helpers::*;
 use super::image_helpers::*;
 
@@ -356,6 +358,7 @@ pub fn get_key_point_descriptor(
 ) -> SiftDescriptor {
     // println!("heyyyyyyyyyyyyy");
     let gaussian_kernel = gaussian_kernel_2d(SIFT_WINDOW_SIZE as u16, Some(GAUSSIAN_SIGMA));
+    // panic!();
     // println!("gaussian_kernel={:?}", gaussian_kernel);
     let neighborhood = (
         (
@@ -368,8 +371,8 @@ pub fn get_key_point_descriptor(
         ),
     );
 
-    let relative_gradient_directions =
-        gradient_directions.map(|direction| (direction - key_point_orientation + TWO_PI) % TWO_PI);
+    // let relative_gradient_directions = gradient_directions
+    //     .map(|direction| (direction - (key_point_orientation % TWO_PI) + TWO_PI) % TWO_PI);
 
     // println!(
     //     "yope 1 img_shape={:?}, neighhb={:?}",
@@ -396,9 +399,19 @@ pub fn get_key_point_descriptor(
                     //     key_point.y,
                     //     (y - key_point.y + SIFT_WINDOW_SIZE) as usize,
                     // );
-                    let bin_index = (SIFT_BIN_COUNT as f64
-                        * relative_gradient_directions[[x as usize, y as usize, 0]]
-                        / TWO_PI)
+                    // println!(
+                    //     "kpo={:?}, gd={:?}",
+                    //     key_point_orientation,
+                    //     gradient_directions[[x as usize, y as usize, 0]]
+                    // );
+
+                    let relative_gradient_direction = (gradient_directions
+                        [[x as usize, y as usize, 0]]
+                        - (key_point_orientation % TWO_PI)
+                        + TWO_PI)
+                        % TWO_PI;
+
+                    let bin_index = (SIFT_BIN_COUNT as f64 * relative_gradient_direction / TWO_PI)
                         .floor() as usize;
                     let gaussian_factor = gaussian_kernel[[
                         (x - key_point.x + SIFT_WINDOW_SIZE) as usize,
@@ -411,11 +424,27 @@ pub fn get_key_point_descriptor(
                     // println!("descriptor_index={:?}", descriptor_index);
                     descriptor[descriptor_index as usize] +=
                         gaussian_factor * gradient_magnitudes[[x as usize, y as usize, 0]];
+
+                    if descriptor[descriptor_index as usize] == 0.0 {
+                        // println!("calcd zero");
+                    }
                 }
             }
             // descriptor.append(&mut orientation_vote_counts.to_vec());
         }
     }
+
+    let mut zeros = 0;
+    for num in descriptor {
+        if num == 0.0 {
+            zeros += 1;
+        }
+    }
+
+    // if zeros > 60 {
+    //     println!("zeros={:?}", zeros as f32 / SIFT_DESCRIPTOR_LENGTH as f32);
+    //     println!("key_point_orientation={key_point_orientation}, keypoint={key_point:?}");
+    // }
 
     // println!("descriptor.len()={:?}", descriptor);
 
@@ -451,6 +480,17 @@ pub fn get_key_point_descriptor(
         &mut normalize_sift_descriptor(&mut descriptor),
         0.2,
     ));
+
+    let mut zeros2 = 0;
+    for num in final_descriptor {
+        if num == 0.0 {
+            zeros2 += 1;
+        }
+    }
+
+    if zeros != zeros2 {
+        println!("wtf");
+    }
 
     final_descriptor
 }
@@ -500,6 +540,17 @@ pub fn get_keypoint_descriptors(
                 (img_gradients.y[[x, y, 0]]).atan2(img_gradients.x[[x, y, 0]]) + PI;
         }
     }
+
+    // image_helpers::show_gray_image(
+    //     image_helpers::ndarray_to_image_gray(&gradient_magnitudes, ImgConversionType::CLAMP),
+    //     "gradient_magnitudes",
+    // );
+
+    // image_helpers::show_gray_image(
+    //     image_helpers::ndarray_to_image_gray(&gradient_directions, ImgConversionType::CLAMP),
+    //     "gradient_directions",
+    // );
+
     let mut count = 0;
     let mut descripted_key_points: Vec<DescriptedKeyPoint> = Vec::new();
     for key_point in key_points.iter() {
@@ -527,7 +578,11 @@ pub fn get_keypoint_descriptors(
                 value: key_point.value,
                 orientation: orientations[i],
                 descriptor,
-                color: key_point.color,
+                color: Some([
+                    ((255.0 * (orientations[i] / (2.0 * std::f64::consts::PI))) % 255.0) as u8,
+                    ((255.0 * (orientations[i] / (2.0 * std::f64::consts::PI))) % 255.0) as u8,
+                    ((255.0 * (orientations[i] / (2.0 * std::f64::consts::PI))) % 255.0) as u8,
+                ]),
             })
             .collect();
         count += 1;
@@ -586,7 +641,9 @@ pub fn get_best_matches_by_ratio_test(
         let top_two_matches = sorted_key_point_pairs
             .iter()
             .filter(|(img_1_key_point, _, _)| {
-                img_1_key_point.x == key_point.x && img_1_key_point.y == key_point.y
+                img_1_key_point.x == key_point.x
+                    && img_1_key_point.y == key_point.y
+                    && img_1_key_point.orientation == key_point.orientation
             })
             .take(2)
             .collect::<Vec<&(&DescriptedKeyPoint, &DescriptedKeyPoint, f64)>>();
@@ -600,7 +657,9 @@ pub fn get_best_matches_by_ratio_test(
         let top_two_matches = sorted_key_point_pairs
             .iter()
             .filter(|(_, img_2_key_point, _)| {
-                img_2_key_point.x == key_point.x && img_2_key_point.y == key_point.y
+                img_2_key_point.x == key_point.x
+                    && img_2_key_point.y == key_point.y
+                    && img_2_key_point.orientation == key_point.orientation
             })
             .take(2)
             .collect::<Vec<&(&DescriptedKeyPoint, &DescriptedKeyPoint, f64)>>();
@@ -614,7 +673,7 @@ pub fn get_best_matches_by_ratio_test(
     let filtered_matches: Vec<(&DescriptedKeyPoint, &DescriptedKeyPoint, f64)> = matches
         .iter()
         .cloned()
-        .filter(|(_, _, ratio)| *ratio > 0.85)
+        .filter(|(_, _, ratio)| *ratio < 0.8) // decrease/increase this ratio for fussy images, TODO: consider adding a .take(200) here too
         .collect();
     // println!("pre dedupe={:?}", filtered_matches.len());
     let mut deduped_matches = dedupe_points(filtered_matches);
@@ -627,6 +686,21 @@ pub fn get_best_matches_by_ratio_test(
         deduped_match.0.color = Some(color);
         deduped_match.1.color = Some(color);
     }
+
+    // println!("{:?}", deduped_matches[0]);
+    // let first_10: Vec<f64> = deduped_matches[0..10]
+    //     .to_vec()
+    //     .iter()
+    //     .map(|(_, _, distance)| *distance)
+    //     .collect();
+    // let last_10: Vec<f64> = deduped_matches[deduped_matches.len() - 10..]
+    //     .to_vec()
+    //     .iter()
+    //     .map(|(_, _, distance)| *distance)
+    //     .collect();
+    // println!("First 10: {:?}", first_10);
+    // println!("Last 10: {:?}", last_10);
+
     deduped_matches
 }
 
@@ -655,8 +729,17 @@ pub fn dedupe_points<'a>(
 }
 
 pub fn do_sift(image: &NDRgbImage) -> Vec<DescriptedKeyPoint> {
-    println!("-- Harris keypoints --");
+    println!("-- Image gradients --");
     let img_gradient = get_image_gradients(&image);
+    // show_gray_image(
+    //     ndarray_to_image_gray(&img_gradient.x, ImgConversionType::CLAMP),
+    //     "img gradient x",
+    // );
+    // show_gray_image(
+    //     ndarray_to_image_gray(&img_gradient.y, ImgConversionType::CLAMP),
+    //     "img gradient y",
+    // );
+    println!("-- Harris keypoints --");
     let img_harris_keypoints = compute_harris_keypoints(&image, &img_gradient);
     println!("-- SIFT Descriptors --");
     get_keypoint_descriptors(&image, &img_gradient, &img_harris_keypoints)

@@ -53,7 +53,6 @@ pub fn show_rgb_image(img: RgbImage, name: &str) -> WindowProxy {
     show_image(image::DynamicImage::ImageRgb8(img), name)
 }
 
-#[allow(dead_code)]
 pub fn show_gray_image(img: GrayImage, name: &str) -> WindowProxy {
     show_image(image::DynamicImage::ImageLuma8(img), name)
 }

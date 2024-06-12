@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-IMAGE_NAME="comp245-rust-build:latest"
+IMAGE_NAME="minisift-rust-build:latest"
 WD=$(pwd)
 
 echo "Rebuilding docker image"
@@ -12,7 +12,7 @@ echo "Done rebuilding docker image"
 
 docker run \
   --rm \
-  -v $WD:/root/comp245 \
+  -v $WD:/root/minisift \
   -e OpenCV_DIR="/usr/local/lib/cmake/opencv4" \
   -e OpenCV_DIR="/usr/local/lib" \
   $IMAGE_NAME \
